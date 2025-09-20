@@ -464,7 +464,13 @@ def run_cross_entropy(
     # log sum exp -> log(e^zi / sum(e^z)) = zi - log(sum(e^z))
     
     # shape: shape: (batch_size, vocab_size)
-    log_sum_exp = torch.logsumexp(inputs, dim=-1, keepdim=True)
+    # use library:
+    # log_sum_exp = torch.logsumexp(inputs, dim=-1, keepdim=True)
+    # not use library:
+    max_vals, _ = torch.max(inputs, dim=-1, keepdim=True)
+    z_shifted = inputs - max_vals
+    z_shifted_exp = torch.exp(z_shifted)
+    log_sum_exp = torch.log(torch.sum(z_shifted_exp, dim=-1, keepdim=True)) + max_vals    
     log_probs = inputs - log_sum_exp
 
     # targets_expanded.shape: (batch_size, 1) from (batch_size,)
