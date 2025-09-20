@@ -392,7 +392,8 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+    sigmoid = 1. / (1. + torch.exp(-in_features))
+    return in_features * sigmoid
 
 
 def run_get_batch(
@@ -462,7 +463,7 @@ def run_cross_entropy(
     # cross entropy = -log(logits)
     # log(softmax) -> overflow
     # log sum exp -> log(e^zi / sum(e^z)) = zi - log(sum(e^z))
-    
+
     # shape: shape: (batch_size, vocab_size)
     # use library:
     # log_sum_exp = torch.logsumexp(inputs, dim=-1, keepdim=True)
