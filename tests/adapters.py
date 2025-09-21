@@ -89,7 +89,16 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+
+    # The full feed-forward block (expand → gate → project back)
+    # SwiGLU(x)=(SiLU(xW1​)⊙(xW2))W3
+
+    # up projection and silu activation, for gating, shape: [... d_ff]
+    a = torch.nn.SiLU()(in_features @ w1_weight.transpose(-2, -1))
+    # up projection, for main information, shape: [... d_ff]
+    b = in_features @ w3_weight.transpose(-2, -1)
+    # down projection
+    return (a * b) @ w2_weight.transpose(-2, -1)
 
 
 def run_scaled_dot_product_attention(
