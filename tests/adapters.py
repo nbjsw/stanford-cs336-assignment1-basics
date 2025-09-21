@@ -49,8 +49,15 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-
-    raise NotImplementedError
+    # Standard Python lists and NumPy arrays) does not inherently support the syntax of using
+    # an entire array (or tensor) as an index to extract multi-dimensional sub-elements.
+    #
+    # This syntax, such as weights[token_ids], is known as Advanced Indexing (or Fancy Indexing),
+    # and it is provided by specialized libraries designed for processing large amounts of data.
+    #
+    # weights[5] → embedding of vocab 5
+    # weights[[5, 8, 12]] → return embedding of 5, 8, 12 at the same time
+    return weights[token_ids]
 
 
 def run_swiglu(
