@@ -384,7 +384,10 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    mean_square = torch.sum(torch.square(in_features), dim=-1, keepdim=True) / d_model
+    rms = torch.sqrt(mean_square + eps)
+    # weights applied to the last dimension in rms
+    return in_features / rms * weights
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
