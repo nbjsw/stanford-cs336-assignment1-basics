@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
+import numpy as np
 import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
@@ -416,6 +417,7 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
     return in_features * sigmoid
 
 
+# Logic: https://chatgpt.com/s/t_68d2251e20e08191a5b3870bc770d07f
 def run_get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -436,7 +438,32 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    # offset selection
+    # (X + Y) -> context_length + 1
+    # assume dataset: 10
+    # context_length: 4
+    # max_start_index: 5
+    max_start_index = len(dataset) - context_length - 1
+    start_indices = np.random.randint(low=0, high=max_start_index + 1, size=batch_size)
+
+    # advance indexing
+    offsets = np.arange(context_length)
+    # key step: start_indices (batch_size,) + offsets (1, context_length) => (batch_size, context_length)
+    # np.newaxis is similar to tensor.unsqueeze(1)
+    # start_indices[:, np.newaxis] shape is (batch_size, 1)
+    # offsets (1, context_length)
+    # add -> broadcasting => (batch_size, context_length)
+    indices_x = start_indices[:, np.newaxis] + offsets
+    x = dataset[indices_x]
+    indices_y = indices_x + 1
+    y = dataset[indices_y]
+
+    x = torch.from_numpy(x).long()
+    y = torch.from_numpy(y).long()
+    x = x.to(device)
+    y = y.to(device)
+
+    return x, y
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
