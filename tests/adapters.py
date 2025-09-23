@@ -122,7 +122,14 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    # shape ( ... queries keys)
+    d_k = K.size(-1)
+    scaled_scores = (Q @ K.transpose(-2, -1)) / (d_k ** 0.5)
+    if mask is not None:
+        scaled_scores.masked_fill_(~mask, -1e9)
+    attention_weights = torch.softmax(scaled_scores, dim=-1)
+    output = attention_weights @ V
+    return output
 
 
 def run_multihead_self_attention(
