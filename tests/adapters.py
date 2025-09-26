@@ -163,7 +163,36 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    *batch_dims, sequence_length, d_in = in_features.shape
+    dim_k = k_proj_weight.size(0)
+    dim_v = v_proj_weight.size(0)
+    dim_k_per_head = dim_k // num_heads
+    dim_v_per_head = dim_v // num_heads
+
+    Q = in_features @ q_proj_weight.T # [ ... sequence_length d_k]
+    K = in_features @ k_proj_weight.T # [ ... sequence_length d_k]
+    V = in_features @ v_proj_weight.T # [ ... sequence_length d_v]
+
+    Q = Q.reshape(*batch_dims, sequence_length, num_heads, dim_k_per_head).transpose(-3, -2) # [ ... num_heads, sequence_length dim_k_per_head]
+    K = K.reshape(*batch_dims, sequence_length, num_heads, dim_k_per_head).transpose(-3, -2) # [ ... num_heads, sequence_length dim_k_per_head]
+    V = V.reshape(*batch_dims, sequence_length, num_heads, dim_v_per_head).transpose(-3, -2) # [ ... num_heads, sequence_length dim_v_per_head]
+
+    scores = (Q @ K.transpose(-2, -1)) / (dim_k_per_head ** 0.5) # [ ... num_heads, sequence_length sequence_length]
+
+    # remove the scores from future token
+    # diagonal = 1 => diagonal excluded
+    causal_mask = torch.triu(torch.ones(sequence_length, sequence_length, device=scores.device, dtype=torch.bool), diagonal=1)
+    scores = scores.masked_fill(causal_mask, -1e10)
+
+    attn = torch.softmax(scores, dim=-1) # [ ... num_heads, sequence_length sequence_length]
+    
+    context = attn @ V # [ ... num_heads, sequence_length dim_v_per_head]
+    
+    context = context.transpose(-3, -2).reshape(*batch_dims, sequence_length, dim_v)
+    
+    output = context @ o_proj_weight.T
+ 
+    return output
 
 
 def run_multihead_self_attention_with_rope(
