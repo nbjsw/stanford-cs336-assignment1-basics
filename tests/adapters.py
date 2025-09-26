@@ -7,6 +7,7 @@ from typing import IO, Any, BinaryIO
 import numpy as np
 import numpy.typing as npt
 import torch
+from einops import rearrange
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
@@ -173,9 +174,9 @@ def run_multihead_self_attention(
     K = in_features @ k_proj_weight.T # [ ... sequence_length d_k]
     V = in_features @ v_proj_weight.T # [ ... sequence_length d_v]
 
-    Q = Q.reshape(*batch_dims, sequence_length, num_heads, dim_k_per_head).transpose(-3, -2) # [ ... num_heads, sequence_length dim_k_per_head]
-    K = K.reshape(*batch_dims, sequence_length, num_heads, dim_k_per_head).transpose(-3, -2) # [ ... num_heads, sequence_length dim_k_per_head]
-    V = V.reshape(*batch_dims, sequence_length, num_heads, dim_v_per_head).transpose(-3, -2) # [ ... num_heads, sequence_length dim_v_per_head]
+    Q = rearrange(Q, ' ... s (h k_h) -> ... h s k_h', h=num_heads, k_h=dim_k_per_head) # [ ... num_heads, sequence_length dim_k_per_head]
+    K = rearrange(K, ' ... s (h k_h) -> ... h s k_h', h=num_heads, k_h=dim_k_per_head) # [ ... num_heads, sequence_length dim_k_per_head]
+    V = rearrange(V, ' ... s (h v_h) -> ... h s v_h', h=num_heads, v_h=dim_v_per_head) # [ ... num_heads, sequence_length dim_v_per_head]
 
     scores = (Q @ K.transpose(-2, -1)) / (dim_k_per_head ** 0.5) # [ ... num_heads, sequence_length sequence_length]
 
@@ -188,10 +189,10 @@ def run_multihead_self_attention(
     
     context = attn @ V # [ ... num_heads, sequence_length dim_v_per_head]
     
-    context = context.transpose(-3, -2).reshape(*batch_dims, sequence_length, dim_v)
-    
+    context = rearrange(context, ' ... h s v_h -> ... s (h v_h)') # [ ... squence_length dim_v]
+
     output = context @ o_proj_weight.T
- 
+
     return output
 
 
