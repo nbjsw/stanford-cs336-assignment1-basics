@@ -11,7 +11,7 @@ from einops import rearrange
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from utils import bpe, linear, tokenizer, optimizer
+from utils import bpe, embedding, linear, tokenizer, optimizer
 
 
 def run_linear(
@@ -71,15 +71,13 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-    # Standard Python lists and NumPy arrays) does not inherently support the syntax of using
-    # an entire array (or tensor) as an index to extract multi-dimensional sub-elements.
-    #
-    # This syntax, such as weights[token_ids], is known as Advanced Indexing (or Fancy Indexing),
-    # and it is provided by specialized libraries designed for processing large amounts of data.
-    #
-    # weights[5] → embedding of vocab 5
-    # weights[[5, 8, 12]] → return embedding of 5, 8, 12 at the same time
-    return weights[token_ids]
+    embedding_module = embedding.Embedding(vocab_size, d_model)
+    state_dict = {
+        'W': weights
+    }
+    embedding_module.load_state_dict(state_dict)
+    output = embedding_module(token_ids)
+    return output
 
 
 def run_swiglu(
