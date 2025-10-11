@@ -11,7 +11,7 @@ from einops import rearrange
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from utils import bpe, tokenizer, optimizer
+from utils import bpe, linear, tokenizer, optimizer
 
 
 def run_linear(
@@ -32,7 +32,25 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-    return in_features @ weights.transpose(-2, -1)
+    # 1. 实例化您的 Linear 模块
+    linear_module = linear.Linear(in_features=d_in, out_features=d_out)
+
+    # 2. 构造状态字典
+    # 您实现的权重参数名为 'W'
+    state_dict = {
+        'W': weights
+        # 因为没有偏置，所以状态字典中只有 W
+    }
+
+    # 3. 使用 load_state_dict 加载权重
+    # strict=True 是默认行为，确保所有键匹配
+    linear_module.load_state_dict(state_dict)
+
+    # 4. 执行前向传播
+    output = linear_module(in_features)
+
+    return output
+
 
 
 def run_embedding(
