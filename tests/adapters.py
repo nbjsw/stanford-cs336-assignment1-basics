@@ -11,7 +11,7 @@ from einops import rearrange
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from utils import bpe, embedding, linear, tokenizer, optimizer
+from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm
 
 
 def run_linear(
@@ -38,7 +38,7 @@ def run_linear(
     # 2. 构造状态字典
     # 您实现的权重参数名为 'W'
     state_dict = {
-        'W': weights
+        'gain': weights
         # 因为没有偏置，所以状态字典中只有 W
     }
 
@@ -449,10 +449,10 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    mean_square = torch.sum(torch.square(in_features), dim=-1, keepdim=True) / d_model
-    rms = torch.sqrt(mean_square + eps)
-    # weights applied to the last dimension in rms
-    return in_features / rms * weights
+    rmsnorm_module = rmsnorm.RMSNorm(d_model, eps=eps)
+    rmsnorm_module.load_state_dict({'gains': weights})
+    out = rmsnorm_module(in_features)
+    return out
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
