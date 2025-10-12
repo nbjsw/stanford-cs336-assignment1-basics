@@ -11,7 +11,8 @@ from einops import rearrange
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm
+from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm, silu
+from utils import swiglu
 
 
 def run_linear(
@@ -38,7 +39,7 @@ def run_linear(
     # 2. 构造状态字典
     # 您实现的权重参数名为 'W'
     state_dict = {
-        'gain': weights
+        'W': weights
         # 因为没有偏置，所以状态字典中只有 W
     }
 
@@ -102,23 +103,15 @@ def run_swiglu(
     Returns:
         Float[Tensor, "... d_model"]: Output embeddings of the same shape as the input embeddings.
     """
-    # Example:
-    # If your state dict keys match, you can use `load_state_dict()`
-    # swiglu.load_state_dict(weights)
-    # You can also manually assign the weights
-    # swiglu.w1.weight.data = w1_weight
-    # swiglu.w2.weight.data = w2_weight
-    # swiglu.w3.weight.data = w3_weight
+    device, dtype = in_features.device, in_features.dtype
+    model = swiglu.SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+    model.load_state_dict({
+        "W1.W": w1_weight,
+        "W2.W": w2_weight,
+        "W3.W": w3_weight,
+    })
+    return model(in_features)
 
-    # The full feed-forward block (expand → gate → project back)
-    # SwiGLU(x)=(SiLU(xW1​)⊙(xW2))W3
-
-    # up projection and silu activation, for gating, shape: [... d_ff]
-    a = torch.nn.SiLU()(in_features @ w1_weight.transpose(-2, -1))
-    # up projection, for main information, shape: [... d_ff]
-    b = in_features @ w3_weight.transpose(-2, -1)
-    # down projection
-    return (a * b) @ w2_weight.transpose(-2, -1)
 
 
 def run_scaled_dot_product_attention(
@@ -466,8 +459,9 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    sigmoid = 1. / (1. + torch.exp(-in_features))
-    return in_features * sigmoid
+    silu_module = silu.SiLU()
+    out = silu_module(in_features)
+    return out
 
 
 # Logic: https://chatgpt.com/s/t_68d2251e20e08191a5b3870bc770d07f
