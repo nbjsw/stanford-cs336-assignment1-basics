@@ -12,7 +12,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm, silu
-from utils import softmax, swiglu, rope
+from utils import attention, softmax, swiglu, rope
 
 
 def run_linear(
@@ -132,14 +132,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    # shape ( ... queries keys)
-    d_k = K.size(-1)
-    scaled_scores = (Q @ K.transpose(-2, -1)) / (d_k ** 0.5)
-    if mask is not None:
-        scaled_scores.masked_fill_(~mask, -1e9)
-    attention_weights = torch.softmax(scaled_scores, dim=-1)
-    output = attention_weights @ V
-    return output
+    return attention.scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
