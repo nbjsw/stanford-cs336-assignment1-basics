@@ -12,7 +12,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm, silu
-from utils import swiglu, rope
+from utils import softmax, swiglu, rope
 
 
 def run_linear(
@@ -528,17 +528,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    # Stability
-    max_vals, _ = torch.max(in_features, dim=dim, keepdim=True)
-    z_shifted = in_features - max_vals
-
-    # Numerator
-    numerator = torch.exp(z_shifted)
-
-    # Denominator
-    denominator = torch.sum(numerator, dim=dim, keepdim=True)
-
-    return numerator / denominator
+    return softmax.softmax(in_features, dim)
 
 
 def run_cross_entropy(
