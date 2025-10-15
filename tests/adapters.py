@@ -166,36 +166,17 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    *batch_dims, sequence_length, d_in = in_features.shape
-    dim_k = k_proj_weight.size(0)
-    dim_v = v_proj_weight.size(0)
-    dim_k_per_head = dim_k // num_heads
-    dim_v_per_head = dim_v // num_heads
+    cmha = attention.CausalMultiheadSelfAttention(d_model, num_heads)
 
-    Q = in_features @ q_proj_weight.T # [ ... sequence_length d_k]
-    K = in_features @ k_proj_weight.T # [ ... sequence_length d_k]
-    V = in_features @ v_proj_weight.T # [ ... sequence_length d_v]
-
-    Q = rearrange(Q, ' ... s (h k_h) -> ... h s k_h', h=num_heads, k_h=dim_k_per_head) # [ ... num_heads, sequence_length dim_k_per_head]
-    K = rearrange(K, ' ... s (h k_h) -> ... h s k_h', h=num_heads, k_h=dim_k_per_head) # [ ... num_heads, sequence_length dim_k_per_head]
-    V = rearrange(V, ' ... s (h v_h) -> ... h s v_h', h=num_heads, v_h=dim_v_per_head) # [ ... num_heads, sequence_length dim_v_per_head]
-
-    scores = (Q @ K.transpose(-2, -1)) / (dim_k_per_head ** 0.5) # [ ... num_heads, sequence_length sequence_length]
-
-    # remove the scores from future token
-    # diagonal = 1 => diagonal excluded
-    causal_mask = torch.triu(torch.ones(sequence_length, sequence_length, device=scores.device, dtype=torch.bool), diagonal=1)
-    scores = scores.masked_fill(causal_mask, -1e10)
-
-    attn = torch.softmax(scores, dim=-1) # [ ... num_heads, sequence_length sequence_length]
-    
-    context = attn @ V # [ ... num_heads, sequence_length dim_v_per_head]
-    
-    context = rearrange(context, ' ... h s v_h -> ... s (h v_h)') # [ ... squence_length dim_v]
-
-    output = context @ o_proj_weight.T
-
-    return output
+    state_dict = {
+        'W_Q.W': q_proj_weight,
+        'W_K.W': k_proj_weight,
+        'W_V.W': v_proj_weight,
+        'W_O.W': o_proj_weight,
+    }
+    cmha.load_state_dict(state_dict)
+    out = cmha(in_features)
+    return out
 
 
 def run_multihead_self_attention_with_rope(
@@ -235,7 +216,17 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    cmha = attention.CausalMultiheadSelfAttention(d_model, num_heads, max_seq_len, theta)
+
+    state_dict = {
+        'W_Q.W': q_proj_weight,
+        'W_K.W': k_proj_weight,
+        'W_V.W': v_proj_weight,
+        'W_O.W': o_proj_weight,
+    }
+    cmha.load_state_dict(state_dict)
+    out = cmha(in_features, token_positions)
+    return out
 
 
 def run_rope(

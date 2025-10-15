@@ -9,7 +9,7 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         """Applies RoPE to the input tensor.
 
            Args:
-               theta: Θ value for the RoPE
+               theta: value for the RoPE
                d_k: dimension of query and key vectors
                max_seq_len: Maximum sequence length that will be inputted
                device: Device to store the buffer on
