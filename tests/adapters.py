@@ -12,7 +12,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm, silu
-from utils import attention, softmax, swiglu, rope
+from utils import attention, softmax, swiglu, rope, prenorm_transformer_block
 
 
 def run_linear(
@@ -323,7 +323,18 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    transformer = prenorm_transformer_block.PreNormTransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta)
+    transformer.load_state_dict({
+        'norm1.gains': weights['ln1.weight'],
+        'norm2.gains': weights['ln2.weight'],
+        'attn.W_Q.W': weights['attn.q_proj.weight'],
+        'attn.W_K.W': weights['attn.k_proj.weight'],
+        'attn.W_V.W': weights['attn.v_proj.weight'],
+        'attn.W_O.W': weights['attn.output_proj.weight'],
+        'ffn.W1.W': weights['ffn.w1.weight'],
+        'ffn.W2.W': weights['ffn.w2.weight'],
+        'ffn.W3.W': weights['ffn.w3.weight']})
+    return transformer(in_features)
 
 
 def run_transformer_lm(
