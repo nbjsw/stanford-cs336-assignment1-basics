@@ -17,7 +17,7 @@ class RMSNorm(torch.nn.Module):
         self.d_model = d_model
         self.eps = eps
         factory_kwargs = {'device': device, 'dtype': dtype}
-        self.gains = torch.nn.Parameter(torch.ones((d_model,), **factory_kwargs))
+        self.weight = torch.nn.Parameter(torch.ones((d_model,), **factory_kwargs))
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -28,6 +28,6 @@ class RMSNorm(torch.nn.Module):
         x = x.to(torch.float32)
         mean_square = torch.sum(torch.square(x), dim=-1, keepdim=True) / self.d_model
         rms = torch.sqrt(mean_square + self.eps)
-        x = x / rms * self.gains
+        x = x / rms * self.weight
         return x.to(in_dtype)
 

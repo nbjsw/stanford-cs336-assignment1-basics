@@ -56,10 +56,10 @@ class CausalMultiheadSelfAttention(torch.nn.Module):
 
         factory_kwargs = {'device': device, 'dtype': dtype}
 
-        self.W_Q = linear.Linear(d_model, d_model, **factory_kwargs)
-        self.W_K = linear.Linear(d_model, d_model, **factory_kwargs)
-        self.W_V = linear.Linear(d_model, d_model, **factory_kwargs)
-        self.W_O = linear.Linear(d_model, d_model, **factory_kwargs)
+        self.q_proj = linear.Linear(d_model, d_model, **factory_kwargs)
+        self.k_proj = linear.Linear(d_model, d_model, **factory_kwargs)
+        self.v_proj = linear.Linear(d_model, d_model, **factory_kwargs)
+        self.output_proj = linear.Linear(d_model, d_model, **factory_kwargs)
 
         self.score = self.d_head ** (-0.5)
 
@@ -84,9 +84,9 @@ class CausalMultiheadSelfAttention(torch.nn.Module):
         _, seq_len, d_model = x.shape
         
         # 1. 线性投影 (Q = x W^Q)
-        Q = self.W_Q(x)
-        K = self.W_K(x)
-        V = self.W_V(x)
+        Q = self.q_proj(x)
+        K = self.k_proj(x)
+        V = self.v_proj(x)
         
         # 2. 分割多头: (B, H, L, D)
         Q = self._split_heads(Q)
@@ -114,7 +114,7 @@ class CausalMultiheadSelfAttention(torch.nn.Module):
         output = self._combine_heads(output)
         
         # 7. 最终线性投影 (WO)
-        output = self.W_O(output)
+        output = self.output_proj(output)
         
         return output
 

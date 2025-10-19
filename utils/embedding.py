@@ -19,9 +19,9 @@ class Embedding(torch.nn.Module):
 
         factory_kwargs = {'device': device, 'dtype': dtype}
 
-        self.W = torch.nn.Parameter(torch.empty((num_embeddings, embedding_dim), **factory_kwargs))
+        self.weight = torch.nn.Parameter(torch.empty((num_embeddings, embedding_dim), **factory_kwargs))
         std = 1.0 / torch.sqrt(torch.tensor(num_embeddings, dtype=torch.float32))
-        torch.nn.init.trunc_normal_(self.W, mean=0.0, std=std, a=-2 * std, b=2 * std)
+        torch.nn.init.trunc_normal_(self.weight, mean=0.0, std=std, a=-2 * std, b=2 * std)
 
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
@@ -34,5 +34,5 @@ class Embedding(torch.nn.Module):
         #
         # weights[5] → embedding of vocab 5
         # weights[[5, 8, 12]] → return embedding of 5, 8, 12 at the same time
-        return self.W[token_ids]
+        return self.weight[token_ids]
 

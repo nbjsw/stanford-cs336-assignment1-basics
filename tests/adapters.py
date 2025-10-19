@@ -13,6 +13,7 @@ from torch import Tensor
 
 from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm, silu
 from utils import attention, softmax, swiglu, rope, prenorm_transformer_block
+from utils import transformer_lm, loss
 
 
 def run_linear(
@@ -37,10 +38,10 @@ def run_linear(
     linear_module = linear.Linear(in_features=d_in, out_features=d_out)
 
     # 2. 构造状态字典
-    # 您实现的权重参数名为 'W'
+    # 您实现的权重参数名为 'weight'
     state_dict = {
-        'W': weights
-        # 因为没有偏置，所以状态字典中只有 W
+        'weight': weights
+        # 因为没有偏置，所以状态字典中只有 weight
     }
 
     # 3. 使用 load_state_dict 加载权重
@@ -74,7 +75,7 @@ def run_embedding(
     """
     embedding_module = embedding.Embedding(vocab_size, d_model)
     state_dict = {
-        'W': weights
+        'weight': weights
     }
     embedding_module.load_state_dict(state_dict)
     output = embedding_module(token_ids)
@@ -106,9 +107,9 @@ def run_swiglu(
     device, dtype = in_features.device, in_features.dtype
     model = swiglu.SwiGLU(d_model, d_ff, device=device, dtype=dtype)
     model.load_state_dict({
-        "W1.W": w1_weight,
-        "W2.W": w2_weight,
-        "W3.W": w3_weight,
+        "w1.weight": w1_weight,
+        "w2.weight": w2_weight,
+        "w3.weight": w3_weight,
     })
     return model(in_features)
 
@@ -169,10 +170,10 @@ def run_multihead_self_attention(
     cmha = attention.CausalMultiheadSelfAttention(d_model, num_heads)
 
     state_dict = {
-        'W_Q.W': q_proj_weight,
-        'W_K.W': k_proj_weight,
-        'W_V.W': v_proj_weight,
-        'W_O.W': o_proj_weight,
+        'q_proj.weight': q_proj_weight,
+        'k_proj.weight': k_proj_weight,
+        'v_proj.weight': v_proj_weight,
+        'output_proj.weight': o_proj_weight,
     }
     cmha.load_state_dict(state_dict)
     out = cmha(in_features)
@@ -219,10 +220,10 @@ def run_multihead_self_attention_with_rope(
     cmha = attention.CausalMultiheadSelfAttention(d_model, num_heads, max_seq_len, theta)
 
     state_dict = {
-        'W_Q.W': q_proj_weight,
-        'W_K.W': k_proj_weight,
-        'W_V.W': v_proj_weight,
-        'W_O.W': o_proj_weight,
+        'q_proj.weight': q_proj_weight,
+        'k_proj.weight': k_proj_weight,
+        'v_proj.weight': v_proj_weight,
+        'output_proj.weight': o_proj_weight,
     }
     cmha.load_state_dict(state_dict)
     out = cmha(in_features, token_positions)
@@ -324,16 +325,7 @@ def run_transformer_block(
         running the Transformer block on the input features while using RoPE.
     """
     transformer = prenorm_transformer_block.PreNormTransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta)
-    transformer.load_state_dict({
-        'norm1.gains': weights['ln1.weight'],
-        'norm2.gains': weights['ln2.weight'],
-        'attn.W_Q.W': weights['attn.q_proj.weight'],
-        'attn.W_K.W': weights['attn.k_proj.weight'],
-        'attn.W_V.W': weights['attn.v_proj.weight'],
-        'attn.W_O.W': weights['attn.output_proj.weight'],
-        'ffn.W1.W': weights['ffn.w1.weight'],
-        'ffn.W2.W': weights['ffn.w2.weight'],
-        'ffn.W3.W': weights['ffn.w3.weight']})
+    transformer.load_state_dict(weights)
     return transformer(in_features)
 
 
@@ -416,7 +408,16 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    tlm = transformer_lm.TransformerLM(
+        vocab_size,
+        context_length,
+        d_model,
+        num_layers,
+        num_heads,
+        d_ff,
+        rope_theta)
+    tlm.load_state_dict(weights)
+    return tlm(in_indices)
 
 
 def run_rmsnorm(
@@ -440,7 +441,7 @@ def run_rmsnorm(
         RMSNorm of the `in_features`.
     """
     rmsnorm_module = rmsnorm.RMSNorm(d_model, eps=eps)
-    rmsnorm_module.load_state_dict({'gains': weights})
+    rmsnorm_module.load_state_dict({'weight': weights})
     out = rmsnorm_module(in_features)
     return out
 
@@ -541,30 +542,8 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    # cross entropy = -log(logits)
-    # log(softmax) -> overflow
-    # log sum exp -> log(e^zi / sum(e^z)) = zi - log(sum(e^z))
-
-    # shape: shape: (batch_size, vocab_size)
-    # use library:
-    # log_sum_exp = torch.logsumexp(inputs, dim=-1, keepdim=True)
-    # not use library:
-    max_vals, _ = torch.max(inputs, dim=-1, keepdim=True)
-    z_shifted = inputs - max_vals
-    z_shifted_exp = torch.exp(z_shifted)
-    log_sum_exp = torch.log(torch.sum(z_shifted_exp, dim=-1, keepdim=True)) + max_vals    
-    log_probs = inputs - log_sum_exp
-
-    # targets_expanded.shape: (batch_size, 1) from (batch_size,)
-    targets_expanded = targets.unsqueeze(1)
-    
-    # l_gathered.shape: (batch_size, 1)
-    # the idea is think target is one-hot [0,0,0,1,...,0, 0, 0]
-    # cross entrophy loss = -sum(y_i * log(logit_i)) => only the valid one kept
-    l_gathered = torch.gather(log_probs, dim=-1, index=targets_expanded)
-    l_gathered_squeezed = l_gathered.squeeze(1)
-    # cross entrophy loss is negative of log(logits)
-    return torch.mean(-l_gathered_squeezed)
+    cross_entrophy = loss.CrossEntropyLoss()
+    return cross_entrophy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:

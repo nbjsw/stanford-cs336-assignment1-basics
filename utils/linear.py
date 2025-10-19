@@ -21,7 +21,7 @@ class Linear(torch.nn.Module):
         # 在 PyTorch 中，对于输入 x (..., in_features) 和 W (out_features, in_features)，
         # 运算是 x @ W.T，结果是 (..., out_features)。
         # 因此，我们需要 W 的形状是 (out_features, in_features)。
-        self.W = torch.nn.Parameter(torch.empty((out_features, in_features), **factory_kwargs))
+        self.weight = torch.nn.Parameter(torch.empty((out_features, in_features), **factory_kwargs))
 
         # 2. 初始化权重
         # 使用 torch.nn.init.trunc_normal_ 进行初始化
@@ -34,7 +34,7 @@ class Linear(torch.nn.Module):
         std = 1.0 / torch.sqrt(torch.tensor(in_features, dtype=torch.float32))
 
         # 使用截断正态分布初始化
-        torch.nn.init.trunc_normal_(self.W, mean=0.0, std=std, a=-2 * std, b=2 * std)
+        torch.nn.init.trunc_normal_(self.weight, mean=0.0, std=std, a=-2 * std, b=2 * std)
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -44,5 +44,5 @@ class Linear(torch.nn.Module):
         # W.T: (in_features, out_features)
         # 结果: (..., out_features)
         # 这就是 PyTorch nn.Linear 在不使用偏置项时的计算方式：y = x @ W.T
-        return x @ self.W.T
+        return x @ self.weight.T
 
