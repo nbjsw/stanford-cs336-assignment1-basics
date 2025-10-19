@@ -1,5 +1,7 @@
 import torch
 
+from typing import Iterable
+
 
 def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, eps: float = 1e-6):
     if max_l2_norm <= 0:

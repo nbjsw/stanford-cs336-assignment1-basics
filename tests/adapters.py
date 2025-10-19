@@ -13,7 +13,7 @@ from torch import Tensor
 
 from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm, silu
 from utils import attention, softmax, swiglu, rope, prenorm_transformer_block
-from utils import transformer_lm, loss, lr
+from utils import clip_grad, transformer_lm, loss, lr
 
 
 def run_linear(
@@ -555,7 +555,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    return gradient_clipping(parameters, max_l2_norm)
+    return clip_grad.gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
