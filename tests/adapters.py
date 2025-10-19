@@ -13,7 +13,7 @@ from torch import Tensor
 
 from utils import bpe, embedding, linear, tokenizer, optimizer, rmsnorm, silu
 from utils import attention, softmax, swiglu, rope, prenorm_transformer_block
-from utils import transformer_lm, loss
+from utils import transformer_lm, loss, lr
 
 
 def run_linear(
@@ -555,22 +555,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    if max_l2_norm <= 0:
-        return
-    # When a tensor is marked to require gradient computation (i.e., its attribute requires_grad=True),
-    # the system will automatically create a .grad attribute for it after the backward pass
-    # (loss.backward()) runs.
-    total_norm = torch.tensor(0.0, device=parameters[0].grad.device)
-    for p in parameters:
-        # if p.grad:
-        # THIS WILL CAUSE THE ERROR if p.grad has multiple elements
-        if p.grad is not None:
-            total_norm += torch.sum(torch.square(p.grad))
-    total_norm = torch.sqrt(total_norm)
-    norm_coeff = torch.clamp(max_l2_norm / total_norm, max=1.0)
-    for p in parameters:
-        if p.grad is not None:
-            p.grad.mul_(norm_coeff)
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
@@ -605,7 +590,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return lr.calculate_cosine_annealing_lr(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(
