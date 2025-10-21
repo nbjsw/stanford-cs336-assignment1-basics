@@ -1,6 +1,10 @@
+import multiprocessing
+import os
 import regex as re
 from collections import defaultdict
 from typing import Any
+from tqdm import tqdm
+
 
 # ----------------------------------------------------------------------
 # Core BPE Training Functions
@@ -285,13 +289,23 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     Raises:
         FileNotFoundError/IOError: If the file fails to read.
     """
-    
+    num_cpus = os.cpu_count() or 4
+    print(f"Using {num_cpus} processes for pre-tokenization.")
+
     text = read_text(input_path)
     # Split text by special tokens to prevent BPE merges from crossing them
     chunks = split_by_special(text, special_tokens, drop_special=True)
 
-    # Calculate initial word frequency for each chunk (map replaces process_map)
-    word_dicts: list[dict[tuple[bytes, ...], int]] = list(map(count_word, chunks))
+    with multiprocessing.Pool(processes=num_cpus) as pool:
+        # pool.imap_unordered 可以惰性地返回结果，并保持 tqdm 进度条的响应性
+        # word_dicts_iterator 包含了来自所有进程的 word 频率字典
+        # Calculate initial word frequency for each chunk (map replaces process_map)
+        word_dicts_iterator = pool.imap_unordered(count_word, chunks)
+        
+        # 使用 tqdm 包装迭代器，以便在结果返回时显示进度
+        word_dicts: list[dict[tuple[bytes, ...], int]] = list(
+            tqdm(word_dicts_iterator, total=len(chunks), desc="Counting Words (Parallel)")
+        )
 
     # Merge word frequencies from all chunks
     word_cnt = merge_dicts(word_dicts)
@@ -305,7 +319,8 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     merges: list[tuple[bytes, bytes]] = []
     
     # Main training loop: Perform n_merges rounds
-    for i in range(n_merges):
+    pbar = tqdm(range(n_merges), desc="BPE Merging", unit="merge")
+    for i in pbar:
         # 1. Find the pair with the maximum frequency
         if not pair_cnt:
             # If there are no more pairs to merge, stop
