@@ -1,6 +1,8 @@
 from typing import Iterator, Iterable, Union, Optional, Any
 import json
+import pickle
 import regex as re
+import ast
 
 from . import bpe
 
@@ -71,6 +73,28 @@ def encode_merged(
     return tokens
 
 
+
+def load_merges_txt(filepath: str) -> list[tuple[bytes, bytes]]:
+    """Loads the ordered list of BPE merges from a text file."""
+    merges: list[tuple[bytes, bytes]] = []
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            # 格式示例: b'th' b'e'
+            parts = line.split()
+            if len(parts) == 2:
+                try:
+                    p1 = ast.literal_eval(parts[0])
+                    p2 = ast.literal_eval(parts[1])
+                    if isinstance(p1, bytes) and isinstance(p2, bytes):
+                        merges.append((p1, p2))
+                except Exception as e:
+                    print(f"Warning: Could not parse merge line: {line}. Error: {e}")
+
+    return merges
+
+
 class Tokenizer:
     def __init__(
         self,
@@ -94,21 +118,8 @@ class Tokenizer:
     def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: Optional[list[str]] = None) -> 'Tokenizer':
         """Load tokenizer data from vocab and merges files."""
 
-        with open(vocab_filepath, 'r', encoding='utf-8') as vf:
-            vocab_data: dict[str, Union[str, list[int]]] = json.load(vf)
-
-            vocab: dict[int, bytes] = {}
-            for k_str, v_data in vocab_data.items():
-                k_int: int = int(k_str)
-
-                if isinstance(v_data, str):
-                    v_bytes: bytes = bytes(v_data, 'latin1')
-                elif isinstance(v_data, list):
-                    v_bytes = bytes(v_data)
-                else:
-                    raise TypeError(f"Unknown vocabulary value type: {type(v_data)}")
-                
-                vocab[k_int] = v_bytes
+        with open(vocab_filepath, 'rb') as f:
+            vocab: dict[int, bytes]  = pickle.load(f)
                 
         with open(merges_filepath, 'r', encoding='utf-8') as mf:
             lines: list[str] = mf.readlines()
