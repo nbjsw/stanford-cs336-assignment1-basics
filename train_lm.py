@@ -4,11 +4,12 @@ import argparse
 import time
 import math
 import os
+import re
 from tqdm import tqdm
 from utils import clip_grad, dataloader, transformer_lm, optimizer, lr, loss
 
 
-def find_latest_checkpoint(checkpoint_path: str) -> tuple[int, str | None]:
+def find_latest_checkpoint(checkpoint_dir: str) -> tuple[int, str | None]:
     """
           扫描检查点目录，找出最大迭代步数的检查点文件。
     
@@ -19,7 +20,7 @@ def find_latest_checkpoint(checkpoint_path: str) -> tuple[int, str | None]:
         (max_iteration, latest_checkpoint_path): 最大步数和对应的文件路径，
                                                 如果找不到任何文件，则返回 (0, None)。
     """
-    if not os.path.isdir(checkpoint_path):
+    if not os.path.isdir(checkpoint_dir):
         return 0, None
 
     # 正则表达式用于匹配文件名中的步数，例如 'checkpoint_step_12345.pt'
@@ -75,6 +76,29 @@ def evaluate(model, data, context_length, batch_size, device) -> tuple[float, fl
     avg_loss = total_loss / num_batches
     avg_ppl = calculate_perplexity(avg_loss)
     return avg_loss, avg_ppl
+
+
+def save_checkpoint(model: torch.nn.Module, optimizer_ins: torch.optim.Optimizer, iteration: int, full_checkpoint_path: str):
+    """
+    Saves the model state, optimizer state, and current iteration number to a file.
+    
+    Args:
+        model: The torch.nn.Module instance to save.
+        optimizer_ins: The torch.optim.Optimizer instance to save.
+        iteration: The next iteration number to resume from (e.g., current iteration + 1).
+        full_checkpoint_path: The full path to the checkpoint file (e.g., 'checkpoints/run1/checkpoint_step_5000.pt').
+    """
+    # 构造要保存的状态字典
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer_ins.state_dict(),
+        'iteration': iteration,
+        # 可以选择性地保存模型配置 (args)
+        # 'config': args_dict 
+    }
+    # 使用 torch.save 进行保存
+    torch.save(checkpoint, full_checkpoint_path)
+    print(f"Checkpoint saved to {full_checkpoint_path} (Resuming iter: {iteration})")
 
 
 def train(args):
@@ -134,7 +158,7 @@ def train(args):
             # 假设你的 load_checkpoint 签名是 (filepath, model, optimizer)
             # 注意: 这里的 load_checkpoint 应该返回保存时的 'iteration + 1'，但我们直接使用 find_latest_checkpoint 得到的 max_iteration
             # 为了严谨，如果 load_checkpoint 失败，我们从 0 开始
-            dataloader.load_checkpoint(latest_ckpt_path, model, optimizer)
+            dataloader.load_checkpoint(latest_ckpt_path, model, optimizer_instance)
             print(f"Checkpoint loaded successfully. Resuming from iteration {start_iteration}.")
         except Exception as e:
             print(f"Warning: Failed to load checkpoint {latest_ckpt_path} ({e}). Starting new run from iteration 0.")
@@ -233,7 +257,7 @@ if __name__ == '__main__':
     # --- 优化器/调度器参数 (Optimizer/Scheduler Arguments) ---
     parser.add_argument('--max_lr', type=float, default=6e-4, help="Maximum learning rate.")
     parser.add_argument('--min_lr', type=float, default=6e-5, help="Minimum learning rate.")
-    parser.add_argument('--warmup_steps', type=int, default=2000, help="Number of steps for linear LR warm-up.")
+    parser.add_argument('--warmup_steps', type=int, default=500, help="Number of steps for linear LR warm-up.")
     parser.add_argument('--decay_steps', type=int, default=50000, help="Number of steps for cosine annealing decay.")
     parser.add_argument('--grad_clip_norm', type=float, default=1.0, help="Maximum L2 norm for gradient clipping.")
     
@@ -242,11 +266,11 @@ if __name__ == '__main__':
     parser.add_argument('--beta2', type=float, default=0.95, help="AdamW beta2 (commonly 0.95 for LLMs).")
     parser.add_argument('--eps', type=float, default=1e-8, help="AdamW epsilon for numerical stability.")
     parser.add_argument('--weight_decay', type=float, default=0.1, help="AdamW weight decay.")
-    
+
     # --- 日志/保存间隔 (Logging/Save Intervals) ---
     parser.add_argument('--log_interval', type=int, default=10, help="Interval for logging training loss to console/tqdm.")
     parser.add_argument('--eval_interval', type=int, default=1000, help="Interval for running validation evaluation.")
-    parser.add_argument('--save_interval', type=int, default=5000, help="Interval for saving checkpoints.")
+    parser.add_argument('--save_interval', type=int, default=500, help="Interval for saving checkpoints.")
 
     args = parser.parse_args()
     train(args)
