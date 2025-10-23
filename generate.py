@@ -209,8 +209,14 @@ def interactive_cli(args):
                 args.context_length  # <-- 直接传递 args.context_length
             )
             
+            if generated_text.startswith(prompt):
+                completion = generated_text[len(prompt):].strip()
+            else:
+                # 以防万一，如果解码错误，打印完整输出
+                completion = generated_text
+            
             print("\n[AI 回复]:")
-            print(generated_text)
+            print(completion)
             print("-" * 25)
 
         except Exception as e:
@@ -243,5 +249,4 @@ if __name__ == '__main__':
 
     # 启动交互式 CLI
     interactive_cli(args)
-
 
