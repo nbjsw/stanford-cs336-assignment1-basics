@@ -240,7 +240,7 @@ if __name__ == '__main__':
     parser.add_argument('--val_data_path', type=str, required=True, help="Path to the tokenized validation data (NumPy array).")
     parser.add_argument('--checkpoint_path', type=str, default='checkpoint.pt', help="Path to save/load model checkpoints.")
     parser.add_argument('--dtype', type=str, default='uint16', choices=['uint16', 'int32'], help="Data type of the tokenized files (e.g., uint16 for TinyStories).")
-    
+
     # --- 模型架构参数 (Model Architecture Arguments) ---
     parser.add_argument('--vocab_size', type=int, default=10000, help="Vocabulary size.")
     parser.add_argument('--context_length', type=int, default=256, help="Maximum sequence length.")
@@ -248,19 +248,19 @@ if __name__ == '__main__':
     parser.add_argument('--num_layers', type=int, default=4, help="Number of Transformer blocks.")
     parser.add_argument('--num_heads', type=int, default=16, help="Number of attention heads.")
     parser.add_argument('--d_ff', type=int, default=1344, help="Feed-forward inner dimension (d_ff).")
-    
+
     # --- 训练参数 (Training Arguments) ---
     parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cuda', 'mps', 'cpu'], help="Device to use for training (auto detects CUDA/MPS).")
     parser.add_argument('--max_iters', type=int, default=50000, help="Total number of training iterations.")
     parser.add_argument('--batch_size', type=int, default=32, help="Batch size.")
-    
+
     # --- 优化器/调度器参数 (Optimizer/Scheduler Arguments) ---
     parser.add_argument('--max_lr', type=float, default=6e-4, help="Maximum learning rate.")
     parser.add_argument('--min_lr', type=float, default=6e-5, help="Minimum learning rate.")
     parser.add_argument('--warmup_steps', type=int, default=500, help="Number of steps for linear LR warm-up.")
     parser.add_argument('--decay_steps', type=int, default=50000, help="Number of steps for cosine annealing decay.")
     parser.add_argument('--grad_clip_norm', type=float, default=1.0, help="Maximum L2 norm for gradient clipping.")
-    
+
     # AdamW specific
     parser.add_argument('--beta1', type=float, default=0.9, help="AdamW beta1.")
     parser.add_argument('--beta2', type=float, default=0.95, help="AdamW beta2 (commonly 0.95 for LLMs).")
@@ -270,7 +270,7 @@ if __name__ == '__main__':
     # --- 日志/保存间隔 (Logging/Save Intervals) ---
     parser.add_argument('--log_interval', type=int, default=10, help="Interval for logging training loss to console/tqdm.")
     parser.add_argument('--eval_interval', type=int, default=1000, help="Interval for running validation evaluation.")
-    parser.add_argument('--save_interval', type=int, default=500, help="Interval for saving checkpoints.")
+    parser.add_argument('--save_interval', type=int, default=5000, help="Interval for saving checkpoints.")
 
     args = parser.parse_args()
     train(args)
