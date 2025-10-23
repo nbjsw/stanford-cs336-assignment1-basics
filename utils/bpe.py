@@ -4,7 +4,7 @@ import regex as re
 from collections import defaultdict
 from typing import Any
 from tqdm import tqdm
-
+from functools import partial
 
 # ----------------------------------------------------------------------
 # Core BPE Training Functions
@@ -13,23 +13,38 @@ from tqdm import tqdm
 # BPE pre-tokenization regex pattern
 PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
-def read_text(input_path: str) -> str:
+
+def read_text_iter(input_path: str, special_tokens: list[str], chunk_size_lines: int = 1000) -> Any:
     """
-    Reads the entire content of the file at the specified path.
+    Reads the file line by line and yields chunks of lines as strings.
+    This acts as a generator to avoid loading the entire file into memory.
 
     Args:
         input_path: The path to the input file (str).
 
     Returns:
         The entire content of the file as a string (str).
-    
+
     Raises:
         FileNotFoundError: If the file path is invalid.
         IOError: If the file fails to read.
     """
     with open(input_path, "r", encoding="utf-8") as f:
-        text = f.read()
-    return text
+        chunk_lines = []
+        for i, line in enumerate(f):
+            chunk_lines.append(line)
+            if (i + 1) % chunk_size_lines == 0:
+                text_chunk = "".join(chunk_lines)
+                sub_chunks = split_by_special(text_chunk, special_tokens, drop_special=True)
+                for sub_chunk in sub_chunks:
+                    yield sub_chunk
+                chunk_lines = []
+
+        if chunk_lines:
+            text_chunk = "".join(chunk_lines)
+            sub_chunks = split_by_special(text_chunk, special_tokens, drop_special=True)
+            for sub_chunk in sub_chunks:
+                yield sub_chunk
 
 
 def split_by_special(text: str, special_tokens: list[str], drop_special: bool = True) -> list[str]:
@@ -292,19 +307,17 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     num_cpus = os.cpu_count() or 4
     print(f"Using {num_cpus} processes for pre-tokenization.")
 
-    text = read_text(input_path)
-    # Split text by special tokens to prevent BPE merges from crossing them
-    chunks = split_by_special(text, special_tokens, drop_special=True)
-
+    # Lazy text generator to void OOM
+    chunks_generator = read_text_iter(input_path, special_tokens=special_tokens, chunk_size_lines=10000)
     with multiprocessing.Pool(processes=num_cpus) as pool:
         # pool.imap_unordered 可以惰性地返回结果，并保持 tqdm 进度条的响应性
         # word_dicts_iterator 包含了来自所有进程的 word 频率字典
         # Calculate initial word frequency for each chunk (map replaces process_map)
-        word_dicts_iterator = pool.imap_unordered(count_word, chunks)
+        word_dicts_iterator = pool.imap_unordered(count_word, chunks_generator)
         
         # 使用 tqdm 包装迭代器，以便在结果返回时显示进度
         word_dicts: list[dict[tuple[bytes, ...], int]] = list(
-            tqdm(word_dicts_iterator, total=len(chunks), desc="Counting Words (Parallel)")
+            tqdm(word_dicts_iterator, desc="Counting Words (Parallel)")
         )
 
     # Merge word frequencies from all chunks

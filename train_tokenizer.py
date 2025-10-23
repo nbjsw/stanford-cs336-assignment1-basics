@@ -14,6 +14,7 @@ def save_merges_txt(merges: list[tuple[bytes, bytes]], filepath: str):
             # 方便读取和调试。
             f.write(f"{p1!r} {p2!r}\n")
 
+
 def train_and_save(
     input_path: str, 
     vocab_size: int, 
@@ -22,7 +23,7 @@ def train_and_save(
     merges_output_path: str
 ):
     """Runs BPE training and saves the resulting vocabulary and merges."""
-    
+
     print(f"Starting BPE training on {input_path}...")
     
     # 调用你 bpe.py 中的核心训练函数
@@ -47,9 +48,9 @@ if __name__ == '__main__':
     parser.add_argument('--special_tokens', type=str, default='<|endoftext|>', help="Comma-separated list of special tokens.")
     parser.add_argument('--vocab_path', type=str, required=True, help="Output path for the vocabulary file (.pkl).")
     parser.add_argument('--merges_path', type=str, required=True, help="Output path for the merges file (.txt).")
-    
+
     args = parser.parse_args()
-    
+
     special_tokens = [t.strip() for t in args.special_tokens.split(',')]
     
     train_and_save(
