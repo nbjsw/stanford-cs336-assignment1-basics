@@ -5,6 +5,7 @@ import time
 import math
 import os
 import re
+from einops import rearrange
 from tqdm import tqdm
 from utils import clip_grad, dataloader, transformer_lm, optimizer, lr, loss
 
@@ -128,7 +129,10 @@ def train(args):
         rope_theta=10000
     ).to(device)
     
-    # 可选：使用 torch.compile 优化性能
+    # 可选：使用 torch.compile 优化性
+    print("Compiling model using torch.compile...")
+    model = torch.compile(model, mode='reduce-overhead')
+    print("Model compilation finished.")
     # if torch.cuda.is_available() and device.startswith('cuda'):
     #     model = torch.compile(model) 
 
@@ -170,6 +174,9 @@ def train(args):
     model.train()
     pbar = tqdm(range(start_iteration, args.max_iters), initial=start_iteration, total=args.max_iters, desc="Training")
 
+    # 预加载数据加载 (Pre Data Loading)
+    X, Y = dataloader.data_loading(train_data, args.batch_size, args.context_length, device)
+
     for iteration in pbar:
         # 获取学习率并更新优化器
         learing_rate = lr.calculate_cosine_annealing_lr(
@@ -180,25 +187,53 @@ def train(args):
             
         # 1. 数据加载 (Data Loading)
         X, Y = dataloader.data_loading(train_data, args.batch_size, args.context_length, device)
-        
+        # print("--- 维度验证（据加载 ） ---")
+        # print(f"X 形状: {X.shape}")
+        # print(f"Targets Y 形状: {Y.shape}")
+        # print("--------------------------")
+
         # 2. 梯度归零 (Zero Gradients)
         optimizer_instance.zero_grad()
         
         # 3. 前向传播 (Forward Pass)
         logits = model(X)
-        
+
+        # 步骤一：展平 Logits
+        # 将 b 和 l 维度合并成一个 (b l) 维度 N
+        flat_logits = rearrange(logits, 'b l v -> (b l) v')
+
+        # 步骤二：展平 Targets Y
+        # 将 b 和 l 维度合并成一个 (b l) 维度 N
+        flat_targets = rearrange(Y, 'b l -> (b l)')
+
+        # print("--- 维度验证（前向传播 & 计算损失 ） ---")
+        # print(f"logits 形状: {logits.shape}")
+        # print("--------------------------")
+
         # 4. 计算损失 (Calculate Loss)
-        cur_loss = criterion(logits, Y)
-        
+        cur_loss = criterion(flat_logits, flat_targets)
+
+        # print("--- 维度验证（前向传播 & 计算损失 ） ---")
+        # print(f"flat_logits 形状: {flat_logits.shape}")
+        # print(f"flat_targets 形状: {flat_targets.shape}")
+        # print("--------------------------")
+
         # 5. 反向传播 (Backward Pass)
         cur_loss.backward()
+
+        # 6. 载数据加载 (Data Loading)
+        # CPU I/O intensive
+        next_X, next_Y = dataloader.data_loading(train_data, args.batch_size, args.context_length, device)
 
         # 6. 梯度裁剪 (Gradient Clipping)
         clip_grad.gradient_clipping(model.parameters(), args.grad_clip_norm)
         
         # 7. 优化器步骤 (Optimizer Step)
+        # GPU compute intensive
         optimizer_instance.step()
-        
+
+        X, Y = next_X, next_Y
+
         # 8. 日志记录和评估 (Logging and Evaluation)
         if iteration % args.log_interval == 0:
             train_loss = cur_loss.item()
@@ -242,35 +277,35 @@ if __name__ == '__main__':
     parser.add_argument('--dtype', type=str, default='uint16', choices=['uint16', 'int32'], help="Data type of the tokenized files (e.g., uint16 for TinyStories).")
 
     # --- 模型架构参数 (Model Architecture Arguments) ---
-    parser.add_argument('--vocab_size', type=int, default=10000, help="Vocabulary size.")
+    parser.add_argument('--vocab_size', type=int, default=32768, help="Vocabulary size.")
     parser.add_argument('--context_length', type=int, default=256, help="Maximum sequence length.")
-    parser.add_argument('--d_model', type=int, default=512, help="Hidden dimension (d_model).")
-    parser.add_argument('--num_layers', type=int, default=4, help="Number of Transformer blocks.")
+    parser.add_argument('--d_model', type=int, default=1280, help="Hidden dimension (d_model).")
+    parser.add_argument('--num_layers', type=int, default=12, help="Number of Transformer blocks.")
     parser.add_argument('--num_heads', type=int, default=16, help="Number of attention heads.")
-    parser.add_argument('--d_ff', type=int, default=1344, help="Feed-forward inner dimension (d_ff).")
+    parser.add_argument('--d_ff', type=int, default=3456, help="Feed-forward inner dimension (d_ff).")
 
     # --- 训练参数 (Training Arguments) ---
     parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cuda', 'mps', 'cpu'], help="Device to use for training (auto detects CUDA/MPS).")
-    parser.add_argument('--max_iters', type=int, default=50000, help="Total number of training iterations.")
+    parser.add_argument('--max_iters', type=int, default=5000, help="Total number of training iterations.")
     parser.add_argument('--batch_size', type=int, default=32, help="Batch size.")
 
     # --- 优化器/调度器参数 (Optimizer/Scheduler Arguments) ---
-    parser.add_argument('--max_lr', type=float, default=6e-4, help="Maximum learning rate.")
-    parser.add_argument('--min_lr', type=float, default=6e-5, help="Minimum learning rate.")
-    parser.add_argument('--warmup_steps', type=int, default=500, help="Number of steps for linear LR warm-up.")
-    parser.add_argument('--decay_steps', type=int, default=50000, help="Number of steps for cosine annealing decay.")
+    parser.add_argument('--max_lr', type=float, default=5e-4, help="Maximum learning rate.")
+    parser.add_argument('--min_lr', type=float, default=1e-4, help="Minimum learning rate.")
+    parser.add_argument('--warmup_steps', type=int, default=50, help="Number of steps for linear LR warm-up.")
+    parser.add_argument('--decay_steps', type=int, default=4500, help="Number of steps for cosine annealing decay.")
     parser.add_argument('--grad_clip_norm', type=float, default=1.0, help="Maximum L2 norm for gradient clipping.")
 
     # AdamW specific
     parser.add_argument('--beta1', type=float, default=0.9, help="AdamW beta1.")
-    parser.add_argument('--beta2', type=float, default=0.95, help="AdamW beta2 (commonly 0.95 for LLMs).")
+    parser.add_argument('--beta2', type=float, default=0.999, help="AdamW beta2 (commonly 0.95 for LLMs).")
     parser.add_argument('--eps', type=float, default=1e-8, help="AdamW epsilon for numerical stability.")
     parser.add_argument('--weight_decay', type=float, default=0.1, help="AdamW weight decay.")
 
     # --- 日志/保存间隔 (Logging/Save Intervals) ---
     parser.add_argument('--log_interval', type=int, default=10, help="Interval for logging training loss to console/tqdm.")
-    parser.add_argument('--eval_interval', type=int, default=1000, help="Interval for running validation evaluation.")
-    parser.add_argument('--save_interval', type=int, default=5000, help="Interval for saving checkpoints.")
+    parser.add_argument('--eval_interval', type=int, default=100, help="Interval for running validation evaluation.")
+    parser.add_argument('--save_interval', type=int, default=200, help="Interval for saving checkpoints.")
 
     args = parser.parse_args()
     train(args)

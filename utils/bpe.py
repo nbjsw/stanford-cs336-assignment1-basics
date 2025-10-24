@@ -4,7 +4,6 @@ import regex as re
 from collections import defaultdict
 from typing import Any
 from tqdm import tqdm
-from functools import partial
 
 # ----------------------------------------------------------------------
 # Core BPE Training Functions
