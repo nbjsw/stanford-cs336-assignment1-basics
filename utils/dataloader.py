@@ -93,7 +93,12 @@ def load_checkpoint(
     checkpoint = torch.load(src, map_location='cpu')
 
     # 2. 使用 load_state_dict 恢复模型状态
-    model.load_state_dict(checkpoint['model_state_dict'])
+    if hasattr(model, '_orig_mod'):
+        model._orig_mod.load_state_dict(checkpoint['model_state_dict'])
+    elif hasattr(model, 'module'):
+        model.module.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
 
     # 3. 使用 load_state_dict 恢复优化器状态
     # 这对于 AdamW 等有状态的优化器（保存了动量等）至关重要

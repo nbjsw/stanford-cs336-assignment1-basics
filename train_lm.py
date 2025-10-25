@@ -92,12 +92,12 @@ def save_checkpoint(model: torch.nn.Module, optimizer_ins: torch.optim.Optimizer
     # 假设 model 是被 torch.compile(raw_model) 包装后的对象
     if hasattr(model, '_orig_mod'):
         # 这是 torch.compile 的解包方法
-        state_dict_to_save = model._orig_mod.state_dict()
+        model_to_save = model._orig_mod.state_dict()
     elif hasattr(model, 'module'):
         # 这是 DDP 的解包方法
-        state_dict_to_save = model.module.state_dict()
+        model_to_save = model.module.state_dict()
     else:
-        state_dict_to_save = model.state_dict()
+        model_to_save = model.state_dict()
 
     # 构造要保存的状态字典
     checkpoint = {
