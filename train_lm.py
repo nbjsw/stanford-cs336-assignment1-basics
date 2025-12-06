@@ -9,6 +9,55 @@ from einops import rearrange
 from tqdm import tqdm
 from utils import clip_grad, dataloader, transformer_lm, optimizer, lr, loss
 
+class Prefetcher:
+    """
+    使用后台线程异步预加载数据的自定义加载器。
+    这是解决 GPU I/O 瓶颈，实现计算与数据加载重叠的关键。
+    """
+    def __init__(self, data_source, batch_size, context_length, device, queue_size=5):
+        self.data_source = data_source
+        self.batch_size = batch_size
+        self.context_length = context_length
+        self.device = device
+        # 使用 Queue 来在线程间安全地传递数据
+        self.queue = queue.Queue(maxsize=queue_size)
+        # 启动一个后台线程来执行数据加载
+        self.loader_thread = threading.Thread(target=self._data_loop, daemon=True)
+        self.stop_event = threading.Event()
+
+    def _data_loop(self):
+        """后台线程持续加载数据并放入队列。"""
+        # 循环，直到接收到停止事件
+        while not self.stop_event.is_set():
+            try:
+                X, Y = dataloader.data_loading(
+                    self.data_source, self.batch_size, self.context_length, self.device
+                )
+                # 将加载好的数据放入队列，如果队列满了，线程会在这里阻塞
+                self.queue.put((X, Y))
+            except Exception as e:
+                # 假设数据用尽或采样出错，等待一会儿再重试或退出
+                # 在实际训练中，如果数据用尽，应该重置采样器或退出
+                if not self.stop_event.is_set():
+                    # print(f"Prefetcher data loading error: {e}. Retrying.")
+                    time.sleep(0.1)
+
+    def start(self):
+        """启动后台加载线程。"""
+        self.loader_thread.start()
+
+    def next(self):
+        """主线程获取下一个预加载的批次数据。"""
+        # 阻塞等待直到队列中有数据
+        return self.queue.get(timeout=30) # 设置超时时间，防止死锁
+
+    def stop(self):
+        """停止后台加载线程。"""
+        self.stop_event.set()
+        # 确保线程能被清理，join等待线程结束
+        if self.loader_thread.is_alive():
+             self.loader_thread.join(timeout=1)
+
 
 def find_latest_checkpoint(checkpoint_dir: str) -> tuple[int, str | None]:
     """
@@ -123,7 +172,6 @@ def train(args):
     # 2. 数据加载 (Data Loading) - 内存高效
     # 使用 np.memmap 进行内存高效的大文件加载
     print(f"Loading training data from {args.train_data_path}")
-    # mode='r' 表示只读模式，非常适合 memmap
     train_data = np.memmap(args.train_data_path, dtype=args.dtype, mode='r')
     print(f"Loading validation data from {args.val_data_path}")
     val_data = np.memmap(args.val_data_path, dtype=args.dtype, mode='r')
@@ -139,13 +187,11 @@ def train(args):
         rope_theta=10000
     ).to(device)
     
-    # 可选：使用 torch.compile 优化性
+    # 可选：使用 torch.compile 优化性 (保留)
     print("Compiling model using torch.compile...")
     model = torch.compile(model, mode='reduce-overhead')
     print("Model compilation finished.")
-    # if torch.cuda.is_available() and device.startswith('cuda'):
-    #     model = torch.compile(model) 
-
+    
     # 4. 优化器设置 (Optimizer Setup)
     optimizer_instance = optimizer.MyAdamW(
         model.parameters(),
@@ -161,6 +207,7 @@ def train(args):
     # 5. 检查点和恢复 (Checkpointing and Resumption)
     max_iteration, latest_ckpt_path = find_latest_checkpoint(args.checkpoint_path)
     start_iteration = max_iteration
+
     # A. 检查是否训练完成
     if start_iteration >= args.max_iters:
         print(f"Training already complete! Max iterations ({args.max_iters}) reached at step {start_iteration}.")
@@ -179,70 +226,75 @@ def train(args):
             start_iteration = 0
     else:
         print("No checkpoint found. Starting new run from iteration 0.")
-    
+
     # 6. 训练循环 (Training Loop)
     model.train()
     pbar = tqdm(range(start_iteration, args.max_iters), initial=start_iteration, total=args.max_iters, desc="Training")
 
-    # 预加载数据加载 (Pre Data Loading)
-    X, Y = dataloader.data_loading(train_data, args.batch_size, args.context_length, device)
+    # --- 启动异步数据预加载器 ---
+    print("Starting asynchronous data prefetcher...")
+    prefetcher = Prefetcher(
+        train_data, 
+        args.batch_size, 
+        args.context_length, 
+        device, 
+        queue_size=5 # 队列大小，可调整
+    )
+    prefetcher.start()
 
-    for iteration in pbar:
-        # 获取学习率并更新优化器
-        learing_rate = lr.calculate_cosine_annealing_lr(
-            iteration, args.max_lr, args.min_lr, args.warmup_steps, args.decay_steps
-        )
-        for param_group in optimizer_instance.param_groups:
-            param_group['lr'] = learing_rate
+    # 预取第一个批次，确保循环启动时就有数据
+    # 这是 Iteration 0 的 X, Y
+    X, Y = prefetcher.next() 
+    
+    # 预取下一个批次，以便在 Iteration 0 的 GPU 计算时加载 Iteration 1 的数据
+    # 这是实现计算/I/O 重叠的关键
+    next_X, next_Y = prefetcher.next() 
+    # -----------------------------
+    try:
+        for iteration in pbar:
+            # 获取学习率并更新优化器
+            learing_rate = lr.calculate_cosine_annealing_lr(
+                iteration, args.max_lr, args.min_lr, args.warmup_steps, args.decay_steps
+            )
+            for param_group in optimizer_instance.param_groups:
+                param_group['lr'] = learing_rate
+                
+            # 1. 梯度归零 (Zero Gradients)
+            optimizer_instance.zero_grad()
             
-        # 1. 数据加载 (Data Loading)
-        X, Y = dataloader.data_loading(train_data, args.batch_size, args.context_length, device)
-        # print("--- 维度验证（据加载 ） ---")
-        # print(f"X 形状: {X.shape}")
-        # print(f"Targets Y 形状: {Y.shape}")
-        # print("--------------------------")
+            # 2. 前向传播 (Forward Pass)
+            logits = model(X)
 
-        # 2. 梯度归零 (Zero Gradients)
-        optimizer_instance.zero_grad()
-        
-        # 3. 前向传播 (Forward Pass)
-        logits = model(X)
+            # 步骤一：展平 Logits
+            flat_logits = rearrange(logits, 'b l v -> (b l) v')
 
-        # 步骤一：展平 Logits
-        # 将 b 和 l 维度合并成一个 (b l) 维度 N
-        flat_logits = rearrange(logits, 'b l v -> (b l) v')
+            # 步骤二：展平 Targets Y
+            flat_targets = rearrange(Y, 'b l -> (b l)')
 
-        # 步骤二：展平 Targets Y
-        # 将 b 和 l 维度合并成一个 (b l) 维度 N
-        flat_targets = rearrange(Y, 'b l -> (b l)')
+            # 3. 计算损失 (Calculate Loss)
+            cur_loss = criterion(flat_logits, flat_targets)
 
-        # print("--- 维度验证（前向传播 & 计算损失 ） ---")
-        # print(f"logits 形状: {logits.shape}")
-        # print("--------------------------")
+            # 4. 反向传播 (Backward Pass)
+            cur_loss.backward()
 
-        # 4. 计算损失 (Calculate Loss)
-        cur_loss = criterion(flat_logits, flat_targets)
+            # 5. 异步数据加载 (Prefetching)
+            # 在这里调用 next()，Prefetcher 线程会阻塞并等待 GPU 完成计算，
+            # 确保在 GPU 空闲时 CPU 立即将数据放入队列。
+            # 这就是计算和 I/O 的重叠！
+            new_next_X, new_next_Y = prefetcher.next()
 
-        # print("--- 维度验证（前向传播 & 计算损失 ） ---")
-        # print(f"flat_logits 形状: {flat_logits.shape}")
-        # print(f"flat_targets 形状: {flat_targets.shape}")
-        # print("--------------------------")
+            # 6. 梯度裁剪 (Gradient Clipping)
+            clip_grad.gradient_clipping(model.parameters(), args.grad_clip_norm)
+            
+            # 7. 优化器步骤 (Optimizer Step)
+            # GPU compute intensive
+            optimizer_instance.step()
 
-        # 5. 反向传播 (Backward Pass)
-        cur_loss.backward()
-
-        # 6. 载数据加载 (Data Loading)
-        # CPU I/O intensive
-        next_X, next_Y = dataloader.data_loading(train_data, args.batch_size, args.context_length, device)
-
-        # 6. 梯度裁剪 (Gradient Clipping)
-        clip_grad.gradient_clipping(model.parameters(), args.grad_clip_norm)
-        
-        # 7. 优化器步骤 (Optimizer Step)
-        # GPU compute intensive
-        optimizer_instance.step()
-
-        X, Y = next_X, next_Y
+            # 8. 交换数据：为下一轮迭代准备预加载好的数据
+            # Iteration N 的 X, Y -> Iteration N+1 的 X, Y
+            X, Y = next_X, next_Y
+            # 更新预加载的下一批数据
+            next_X, next_Y = new_next_X, new_next_Y
 
         # 8. 日志记录和评估 (Logging and Evaluation)
         if iteration % args.log_interval == 0:
@@ -275,6 +327,12 @@ def train(args):
             # os.makedirs(args.checkpoint_path, exist_ok=True)
 
             save_checkpoint(model, optimizer_instance, iteration + 1, full_checkpoint_path)
+
+    except Exception as e:
+        print(f"\nTraining loop error: {e}")
+    finally:
+        # 训练结束或遇到异常时，确保停止预加载器
+        prefetcher.stop()
 
 
 if __name__ == '__main__':
