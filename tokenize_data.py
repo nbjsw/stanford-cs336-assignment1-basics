@@ -1,49 +1,57 @@
 import numpy as np
 import argparse
-
 from tqdm import tqdm
 from utils import tokenizer
-
+from numpy.lib.format import write_array_header_1_0
 
 def tokenize_and_save(
-    raw_text_path: str, 
-    vocab_path: str, 
-    merges_path: str, 
+    raw_text_path: str,
+    vocab_path: str,
+    merges_path: str,
     output_path: str,
     special_tokens: list[str],
     dtype: str = 'uint16'
 ):
     """
-    Loads Tokenizer, tokenizes raw text, and saves the result as a NumPy array.
+    Streaming BPE tokenizer → streaming write to np.memmap (.npy).
+    No full data load. Works for huge datasets (OpenWebText, C4).
     """
-    print("--- Starting Tokenization ---")
-    
-    # 1. 加载 Tokenizer
-    tokenizer_instance = tokenizer.Tokenizer.from_files(vocab_path, merges_path, special_tokens)
-    
-    print(f"Tokenizer initialized. Final Vocab Size: {len(tokenizer_instance.vocab)}")
+    print("--- Starting Tokenization (Streaming Mode) ---")
+    tokenizer_instance = tokenizer.Tokenizer.from_files(
+        vocab_path, merges_path, special_tokens
+    )
 
-    # 2. 内存高效地打开原始文本文件
-    print(f"Tokenizing raw text from {raw_text_path}...")
-    token_ids_list = []
-    
-    # 使用 open() 函数作为字符串的可迭代对象
-    with open(raw_text_path, 'r', encoding='utf-8') as f:
-        # 使用 encode_iterable 方法来惰性地处理文本流
-        token_stream = tokenizer_instance.encode_iterable(f)
-        
-        # 将生成的 token IDs 收集到一个列表中
-        for token_id in tqdm(token_stream, unit=' token', desc='Tokenizing Text'):
-            token_ids_list.append(token_id)
+    print(f"Tokenizer initialized. Vocab size = {len(tokenizer_instance.vocab)}")
+    print(f"Preparing output file: {output_path}")
+    f = open(output_path, "wb")
 
-    print(f"Tokenization complete. Total tokens: {len(token_ids_list)}")
-    
-    # 3. 转换为 NumPy 数组并选择合适的 dtype
-    token_array = np.array(token_ids_list, dtype=dtype)
-    
-    # 4. 保存为 .npy 文件 (用于训练循环中的 np.memmap)
-    np.save(output_path, token_array)
-    print(f"Successfully saved token IDs to {output_path} (dtype={token_array.dtype}, size={token_array.size}).")
+    # Reserve header space
+    header_dict = {
+        'descr': np.dtype(dtype).str,
+        'fortran_order': False,
+        'shape': (0,),  # placeholder, will rewrite later
+    }
+    write_array_header_1_0(f, header_dict)
+    header_end = f.tell()  # remember where data starts
+
+    print("Tokenizing and writing tokens (streaming)...")
+
+    total_tokens = 0
+
+    with open(raw_text_path, "r", encoding="utf-8") as fin:
+        token_stream = tokenizer_instance.encode_iterable(fin)
+        for token_id in tqdm(token_stream, unit=" token"):
+            f.write(np.array(token_id, dtype=dtype).tobytes())
+            total_tokens += 1
+
+    print(f"Tokenization done. Total tokens = {total_tokens}")
+    print("Finalizing .npy header...")
+    f.seek(0)
+    header_dict["shape"] = (total_tokens,)
+    write_array_header_1_0(f, header_dict)
+    f.close()
+    print(f"Saved streaming tokenized data → {output_path}")
+    print("Use np.load(..., mmap_mode='r') for training.")
 
 
 if __name__ == '__main__':
