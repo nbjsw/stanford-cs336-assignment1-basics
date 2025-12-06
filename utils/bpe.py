@@ -303,24 +303,17 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     Raises:
         FileNotFoundError/IOError: If the file fails to read.
     """
-    num_cpus = os.cpu_count() or 4
+    num_cpus = 1 # os.cpu_count() or 4
     print(f"Using {num_cpus} processes for pre-tokenization.")
 
     # Lazy text generator to void OOM
     chunks_generator = read_text_iter(input_path, special_tokens=special_tokens, chunk_size_lines=10000)
+    word_cnt = defaultdict(int)
     with multiprocessing.Pool(processes=num_cpus) as pool:
-        # pool.imap_unordered 可以惰性地返回结果，并保持 tqdm 进度条的响应性
-        # word_dicts_iterator 包含了来自所有进程的 word 频率字典
-        # Calculate initial word frequency for each chunk (map replaces process_map)
-        word_dicts_iterator = pool.imap_unordered(count_word, chunks_generator)
-        
-        # 使用 tqdm 包装迭代器，以便在结果返回时显示进度
-        word_dicts: list[dict[tuple[bytes, ...], int]] = list(
-            tqdm(word_dicts_iterator, desc="Counting Words (Parallel)")
-        )
+        for d in tqdm(pool.imap_unordered(count_word, chunks_generator), desc="Counting Words (Parallel)"):
+            for k, v in d.items():
+                word_cnt[k] += v
 
-    # Merge word frequencies from all chunks
-    word_cnt = merge_dicts(word_dicts)
     # Calculate initial adjacent byte pair frequencies
     pair_cnt = count_pair(word_cnt)
 
