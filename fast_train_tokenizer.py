@@ -53,10 +53,15 @@ def train_bpe_fast(input_path: str,
     with open(temp_json_path, 'r', encoding='utf-8') as f:
         config = json.load(f)
 
-    merges_str_list = config['model']['merges']
+    merges = config['model']['merges']
     merges_bytes: list[tuple[bytes, bytes]] = []
-    for merge_str in merges_str_list:
-        p1_str, p2_str = merge_str.split(' ')
+    for merge in merges:
+        if isinstance(merge, list) and len(merge) ==2:
+            p1_str, p2_str = merge[0], merge[1]
+        elif isinstance(merge, str):
+            p1_str, p2_str = merge.split(' ')
+        else:
+            raise ValueError(f"Unexpected merge format: {merge_item}")
         p1_bytes = p1_str.encode("utf-8")
         p2_bytes = p2_str.encode("utf-8")
         merges_bytes.append((p1_bytes, p2_bytes))
