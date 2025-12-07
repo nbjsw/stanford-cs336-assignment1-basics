@@ -5,7 +5,7 @@ from einops import einsum
 
 class RotaryPositionalEmbedding(torch.nn.Module):
 
-    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device = None, dtype: torch.dtype = None):
         """Applies RoPE to the input tensor.
 
            Args:
@@ -13,6 +13,7 @@ class RotaryPositionalEmbedding(torch.nn.Module):
                d_k: dimension of query and key vectors
                max_seq_len: Maximum sequence length that will be inputted
                device: Device to store the buffer on
+               dtype: Data type
         """
         super().__init__()
 
@@ -47,9 +48,13 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         cos = angles.repeat_interleave(2, dim=-1)
         sin = angles.repeat_interleave(2, dim=-1)
 
+        factory_kwargs = {'device': device, 'dtype': dtype}
+
         # 5. 注册缓冲区 (不进行梯度学习)
-        self.register_buffer('cos', torch.cos(cos).to(device=device), persistent=False)
-        self.register_buffer('sin', torch.sin(sin).to(device=device), persistent=False)      
+        cos_data = torch.cos(cos)
+        sin_data = torch.sin(sin)
+        self.register_buffer('cos', cos_data.to(**factory_kwargs), persistent=False)
+        self.register_buffer('sin', sin_data.to(**factory_kwargs), persistent=False)      
 
 
     def _rotate_half(self, x: torch.Tensor) -> torch.Tensor:

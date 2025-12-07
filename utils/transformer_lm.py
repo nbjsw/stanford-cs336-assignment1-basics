@@ -28,7 +28,7 @@ class TransformerLM(torch.nn.Module):
 
         self.ln_final = rmsnorm.RMSNorm(d_model, **factory_kwargs)
 
-        self.lm_head = linear.Linear(d_model, vocab_size)
+        self.lm_head = linear.Linear(d_model, vocab_size, **factory_kwargs)
 
     
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:

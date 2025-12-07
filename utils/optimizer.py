@@ -10,7 +10,7 @@ from torch import Tensor
 # code: https://chatgpt.com/s/t_68d0950fbb108191b7ef7545d14442a8
 class MyAdamW(Optimizer):
 
-    @jaxtyped
+    @jaxtyped(typechecker=None)
     def __init__(self,
                  params: Float[Tensor, " ..."],
                  lr: float = 1e-3,
@@ -36,7 +36,7 @@ class MyAdamW(Optimizer):
         super(MyAdamW, self).__init__(params, defaults)
 
     @torch.no_grad()
-    @jaxtyped
+    @jaxtyped(typechecker=None)
     def step(self, closure=None):
         loss = None
         if closure is not None:

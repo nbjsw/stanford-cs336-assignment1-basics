@@ -67,7 +67,9 @@ class CausalMultiheadSelfAttention(torch.nn.Module):
             self.rope = rope.RotaryPositionalEmbedding(
                 theta=theta,
                 d_k=self.d_head,
-                max_seq_len=max_seq_len
+                max_seq_len=max_seq_len,
+                device=device,
+                dtype=dtype
             )
         else:
             self.rope = None # 不进行旋转
