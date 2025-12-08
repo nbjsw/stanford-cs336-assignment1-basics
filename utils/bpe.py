@@ -1,49 +1,18 @@
-import multiprocessing
 import os
+import multiprocessing
 import regex as re
 from collections import defaultdict
 from typing import Any
 from tqdm import tqdm
+from bpe_rust import bpe_merge_loop
+
 
 # ----------------------------------------------------------------------
-# Core BPE Training Functions
+# Core BPE Functions
 # ----------------------------------------------------------------------
 
 # BPE pre-tokenization regex pattern
 PAT = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
-
-
-def read_text_iter(input_path: str, special_tokens: list[str], chunk_size_lines: int = 1000) -> Any:
-    """
-    Reads the file line by line and yields chunks of lines as strings.
-    This acts as a generator to avoid loading the entire file into memory.
-
-    Args:
-        input_path: The path to the input file (str).
-
-    Returns:
-        The entire content of the file as a string (str).
-
-    Raises:
-        FileNotFoundError: If the file path is invalid.
-        IOError: If the file fails to read.
-    """
-    with open(input_path, "r", encoding="utf-8") as f:
-        chunk_lines = []
-        for i, line in enumerate(f):
-            chunk_lines.append(line)
-            if (i + 1) % chunk_size_lines == 0:
-                text_chunk = "".join(chunk_lines)
-                sub_chunks = split_by_special(text_chunk, special_tokens, drop_special=True)
-                for sub_chunk in sub_chunks:
-                    yield sub_chunk
-                chunk_lines = []
-
-        if chunk_lines:
-            text_chunk = "".join(chunk_lines)
-            sub_chunks = split_by_special(text_chunk, special_tokens, drop_special=True)
-            for sub_chunk in sub_chunks:
-                yield sub_chunk
 
 
 def split_by_special(text: str, special_tokens: list[str], drop_special: bool = True) -> list[str]:
@@ -87,8 +56,46 @@ def word2bytes(word: str) -> tuple[bytes, ...]:
     Returns:
         A tuple consisting of single-byte 'bytes' objects (tuple[bytes, ...]).
     """
-    # Core: Encode the word into a list of bytes, then convert to a tuple of single-byte objects
     return tuple(bytes([i]) for i in word.encode('utf-8'))
+
+
+# ----------------------------------------------------------------------
+# BPE Training Functions
+# ----------------------------------------------------------------------
+
+def read_text_iter(input_path: str, special_tokens: list[str], chunk_size_lines: int = 1000) -> Any:
+    """
+    Reads the file line by line and yields chunks of lines as strings.
+    This acts as a generator to avoid loading the entire file into memory.
+
+    Args:
+        input_path: The path to the input file (str).
+        special_tokens: A list of special tokens to split by (list[str]).
+        chunk_size_lines: Number of lines to process at once (int).
+
+    Yields:
+        Text chunks as strings.
+
+    Raises:
+        FileNotFoundError: If the file path is invalid.
+        IOError: If the file fails to read.
+    """
+    with open(input_path, "r", encoding="utf-8") as f:
+        chunk_lines = []
+        for i, line in enumerate(f):
+            chunk_lines.append(line)
+            if (i + 1) % chunk_size_lines == 0:
+                text_chunk = "".join(chunk_lines)
+                sub_chunks = split_by_special(text_chunk, special_tokens, drop_special=True)
+                for sub_chunk in sub_chunks:
+                    yield sub_chunk
+                chunk_lines = []
+
+        if chunk_lines:
+            text_chunk = "".join(chunk_lines)
+            sub_chunks = split_by_special(text_chunk, special_tokens, drop_special=True)
+            for sub_chunk in sub_chunks:
+                yield sub_chunk
 
 
 def count_word(text: str) -> dict[tuple[bytes, ...], int]:
@@ -105,27 +112,10 @@ def count_word(text: str) -> dict[tuple[bytes, ...], int]:
     for m in PAT.finditer(text):
         word = m.group(0)
         word_bytes = word2bytes(word)
-        # Following original code logic, only count words with length >= 2
+        # Only count words with length >= 2
         if len(word_bytes) >= 2:
             word_cnt[word_bytes] += 1
     return word_cnt
-
-
-def merge_dicts(dicts: list[dict[Any, int]]) -> dict[Any, int]:
-    """
-    Merges multiple dictionaries with the same key type and integer value type.
-
-    Args:
-        dicts: A list of dictionaries to be merged (list[dict[Any, int]]).
-
-    Returns:
-        The merged dictionary, with keys of type Any and integer frequencies (dict[Any, int]).
-    """
-    merged: dict[Any, int] = defaultdict(int)
-    for d in dicts:
-        for k, v in d.items():
-            merged[k] += v
-    return merged
 
 
 def count_pair(word_cnt: dict[tuple[bytes, ...], int]) -> dict[tuple[bytes, bytes], int]:
@@ -144,27 +134,6 @@ def count_pair(word_cnt: dict[tuple[bytes, ...], int]) -> dict[tuple[bytes, byte
         for i in range(len(word_bytes) - 1):
             pair_cnt[(word_bytes[i], word_bytes[i+1])] += cnt
     return pair_cnt
-
-
-def get_max_pair(pair_cnt: dict[tuple[bytes, bytes], int]) -> tuple[bytes, bytes]:
-    """
-    Finds the byte pair with the maximum frequency.
-    Lexicographical order of the byte pair is used as a tie-breaker.
-
-    Args:
-        pair_cnt: A dictionary mapping byte pairs to their frequencies (dict[tuple[bytes, bytes], int]).
-
-    Returns:
-        The byte pair with the maximum frequency (tuple[bytes, bytes]).
-        
-    Raises:
-        ValueError: If pair_cnt is empty.
-    """
-    # The max() key=(count, pair_tuple) ensures sorting first by frequency, then by lexicographical order
-    if not pair_cnt:
-        raise ValueError("The pair_cnt dictionary is empty, cannot find the maximum pair.")
-    max_pair, _ = max(pair_cnt.items(), key=lambda x: (x[1], x[0]))
-    return max_pair
 
 
 def get_basic_vocab(special_tokens: list[str]) -> dict[int, bytes]:
@@ -186,110 +155,10 @@ def get_basic_vocab(special_tokens: list[str]) -> dict[int, bytes]:
     return vocab
 
 
-def apply_merge(word_bytes: tuple[bytes, ...], merge: tuple[bytes, bytes]) -> tuple[bytes, ...]:
-    """
-    Merges all matching (A, B) pairs into (AB) within a word byte sequence.
-    Note: This is a greedy, non-overlapping merge process performed from left to right.
-
-    Args:
-        word_bytes: The word byte sequence to be merged (tuple[bytes, ...]).
-        merge: The merge pair (A, B) to be applied in this iteration (tuple[bytes, bytes]).
-
-    Returns:
-        The new merged word byte sequence (tuple[bytes, ...]).
-    """
-    # The new byte sequence resulting from the merge
-    merged: bytes = merge[0] + merge[1]
-    i = 0
-    new_word_bytes: list[bytes] = []
-    
-    # Iterate and check for matches
-    while i < len(word_bytes):
-        # Check if the current merge pair matches
-        if i < len(word_bytes) - 1 and word_bytes[i] == merge[0] and word_bytes[i + 1] == merge[1]:
-            new_word_bytes.append(merged)
-            i += 2  # Skip the next element
-        else:
-            new_word_bytes.append(word_bytes[i])
-            i += 1
-            
-    return tuple(new_word_bytes)
-
-
-def update_cnt_optimized(
-    word_cnt: dict[tuple[bytes, ...], int],
-    pair_cnt: dict[tuple[bytes, bytes], int],
-    merge_pair: tuple[bytes, bytes]
-) -> tuple[dict[tuple[bytes, ...], int], dict[tuple[bytes, bytes], int]]:
-    """
-    Performance-optimized version: Only updates the counts for words that contain the `merge_pair`.
-    
-    Args:
-        word_cnt: The current words and their frequencies (dict[tuple[bytes, ...], int]).
-        pair_cnt: The current adjacent byte pair frequencies (dict[tuple[bytes, bytes], int]).
-        merge_pair: The merge pair (A, B) to be executed in this round (tuple[bytes, bytes]).
-    
-    Returns:
-        A tuple containing two elements:
-        - new_word_cnt: The updated words and their frequencies (dict[tuple[bytes, ...], int]).
-        - new_pair_cnt: The updated adjacent byte pair frequencies (dict[tuple[bytes, bytes], int]).
-    """
-    
-    new_word_cnt: dict[tuple[bytes, ...], int] = defaultdict(int)
-    # Copy the current pair_cnt
-    new_pair_cnt: dict[tuple[bytes, bytes], int] = defaultdict(int, pair_cnt)
-
-    words_to_update: dict[tuple[bytes, ...], int] = {}
-    
-    # ----------------------------------------------------------------
-    # Step 1: Filter words containing the merge_pair and copy unchanged words
-    # ----------------------------------------------------------------
-    for word_bytes, cnt in word_cnt.items():
-        has_merge = False
-        if len(word_bytes) >= 2:
-            # Quick check for the presence of the merge_pair
-            for i in range(len(word_bytes) - 1):
-                if (word_bytes[i], word_bytes[i+1]) == merge_pair:
-                    has_merge = True
-                    break
-        
-        if has_merge:
-            words_to_update[word_bytes] = cnt
-        else:
-            # Copy directly to the new word count dictionary (these words remain unchanged)
-            new_word_cnt[word_bytes] += cnt
-
-    # ----------------------------------------------------------------
-    # Step 2: Update the words containing merge_pair and their corresponding pair_cnt
-    # ----------------------------------------------------------------
-    for word_bytes, cnt in words_to_update.items():
-        # 1. Find all old pairs
-        old_pairs = list(zip(word_bytes[:-1], word_bytes[1:]))
-
-        # 2. Subtract the count of old pairs from pair_cnt
-        for pair in old_pairs:
-            new_pair_cnt[pair] -= cnt
-            # Clean up entries with a count of 0
-            if new_pair_cnt[pair] == 0:
-                del new_pair_cnt[pair]
-
-        # 3. Calculate the new word
-        new_word = apply_merge(word_bytes, merge_pair)
-        new_word_cnt[new_word] += cnt
-
-        # 4. Find all new pairs in the new word and update pair_cnt
-        new_pairs = list(zip(new_word[:-1], new_word[1:]))
-        for p in new_pairs:
-            new_pair_cnt[p] += cnt
-            
-    return new_word_cnt, new_pair_cnt
-
-
 def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """
-    BPE Training Main Function (Single-Process Optimized Version V2).
-    Trains the BPE vocabulary and merge rules based on the input text.
-
+    BPE Training Main Function (Rust-accelerated version).
+    
     Args:
         input_path: The path to the text file for training (str).
         vocab_size: The target size of the final vocabulary (int).
@@ -303,10 +172,10 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     Raises:
         FileNotFoundError/IOError: If the file fails to read.
     """
-    num_cpus = 1 # os.cpu_count() or 4
+    num_cpus = os.cpu_count() or 4
     print(f"Using {num_cpus} processes for pre-tokenization.")
 
-    # Lazy text generator to void OOM
+    # Lazy text generator to avoid OOM
     chunks_generator = read_text_iter(input_path, special_tokens=special_tokens, chunk_size_lines=10000)
     word_cnt = defaultdict(int)
     with multiprocessing.Pool(processes=num_cpus) as pool:
@@ -321,28 +190,15 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     base_vocab_size = len(vocab)
     n_merges = vocab_size - base_vocab_size
 
-    merges: list[tuple[bytes, bytes]] = []
+    # Use Rust-accelerated merge loop
+    merges_list = bpe_merge_loop(dict(word_cnt), dict(pair_cnt), n_merges)
     
-    # Main training loop: Perform n_merges rounds
-    pbar = tqdm(range(n_merges), desc="BPE Merging", unit="merge")
-    for i in pbar:
-        # 1. Find the pair with the maximum frequency
-        if not pair_cnt:
-            # If there are no more pairs to merge, stop
-            break
-            
-        try:
-            max_pair = get_max_pair(pair_cnt)
-        except ValueError:
-             # In the context of the for loop, if pair_cnt is empty, get_max_pair will raise, so break
-             break
-        
-        # 2. Update the vocabulary and merges list
+    # Convert to required format and update vocab
+    merges: list[tuple[bytes, bytes]] = []
+    for i, merge_tuple in enumerate(tqdm(merges_list, desc="Building vocab")):
+        merge_pair = (merge_tuple[0], merge_tuple[1])
+        merges.append(merge_pair)
         new_token_id = base_vocab_size + i
-        vocab[new_token_id] = max_pair[0] + max_pair[1]
-        merges.append(max_pair)
-        
-        # 3. Core optimization: Use the exact update function to refresh counts
-        word_cnt, pair_cnt = update_cnt_optimized(word_cnt, pair_cnt, max_pair)
+        vocab[new_token_id] = merge_pair[0] + merge_pair[1]
             
     return vocab, merges
