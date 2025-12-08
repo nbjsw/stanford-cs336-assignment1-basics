@@ -1,9 +1,10 @@
-from typing import Iterator, Iterable, Union, Optional, Any
-import json
+import ast
+import bpe_rust
 import pickle
 import regex as re
-import ast
+import json
 
+from typing import Iterator, Iterable, Union, Optional, Any
 from . import bpe
 
 
@@ -53,27 +54,6 @@ def apply_merges(
     return tuple(word_bytes_list)
 
 
-def encode_merged(
-    text: str, 
-    merges: set[tuple[bytes, bytes]], 
-    vocab_to_id: dict[bytes, int]
-) -> list[int]:
-    """
-    Encode a text chunk (without special tokens) using word splitting and BPE merging.
-    """
-    word_list: list[str] = split_to_words(text)
-    tokens: list[int] = []
-    
-    for word in word_list:
-        word_bytes: tuple[bytes, ...] = bpe.word2bytes(word)
-        merged_word_bytes: tuple[bytes, ...] = apply_merges(word_bytes, merges, vocab_to_id)
-        
-        tokens.extend(vocab_to_id[i] for i in merged_word_bytes)
-        
-    return tokens
-
-
-
 def load_merges_txt(filepath: str) -> list[tuple[bytes, bytes]]:
     """Loads the ordered list of BPE merges from a text file."""
     merges: list[tuple[bytes, bytes]] = []
@@ -102,17 +82,20 @@ class Tokenizer:
         merges: list[tuple[bytes, bytes]],
         special_tokens: list[str] | None = None
     ):
-        self.vocab: dict[int, bytes] = vocab
-        self.merges: set[tuple[bytes, bytes]] = set(merges)
-        self.special_tokens: list[str] = special_tokens if special_tokens else []
-        self.special_tokens_bytes: list[bytes] = [i.encode('utf-8') for i in self.special_tokens]
-        self.vocab_to_id: dict[bytes, int] = {v: k for k, v in vocab.items()}
+        self.vocab = vocab
+        self.vocab_to_id = {v: k for k, v in vocab.items()}
+        self.special_tokens = special_tokens if special_tokens else []
+        self.special_tokens_bytes = [i.encode('utf-8') for i in self.special_tokens]
+
+        merges_set = set(merges)
 
         for token_bytes in self.special_tokens_bytes:
             if token_bytes not in self.vocab_to_id:
                 new_id = len(self.vocab)
                 self.vocab[new_id] = token_bytes
                 self.vocab_to_id[token_bytes] = new_id
+
+        self.core_bpe = bpe_rust.CoreBPE(self.vocab_to_id, merges_set)
 
     @classmethod
     def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: Optional[list[str]] = None) -> 'Tokenizer':
@@ -140,12 +123,16 @@ class Tokenizer:
         """Encode a string into a list of token IDs."""
         chunks: list[str] = bpe.split_by_special(text, self.special_tokens, drop_special=False)
         tokens: list[int] = []
-
+        BATCH_SIZE = 10000
         for chunk in chunks:
             if self.special_tokens and chunk in self.special_tokens:
                 tokens.append(self.vocab_to_id[chunk.encode('utf-8')])
             else:
-                tokens.extend(encode_merged(chunk, self.merges, self.vocab_to_id))
+                words = split_to_words(chunk)
+                for i in range(0, len(words), BATCH_SIZE):
+                    batch = words[i : i + BATCH_SIZE]
+                    batch_ids = self.core_bpe.encode_word_batch(batch)
+                    tokens.extend(batch_ids)
         return tokens
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:

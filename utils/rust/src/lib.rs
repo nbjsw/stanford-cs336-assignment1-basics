@@ -5,7 +5,6 @@ use std::cmp::Ordering;
 use indicatif::{ProgressBar, ProgressStyle};
 
 // --- 数据结构 ---
-
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PairCount {
     count: i32,
@@ -213,8 +212,95 @@ fn bpe_merge_loop<'py>(
     Ok(py_merges)
 }
 
+// 定义一个 Rust 结构体来持有数据
+#[pyclass]
+struct CoreBPE {
+    vocab: HashMap<Vec<u8>, i32>,
+    merges: HashSet<(Vec<u8>, Vec<u8>)>,
+}
+
+#[pymethods]
+impl CoreBPE {
+    #[new]
+    fn new(vocab: HashMap<Vec<u8>, i32>, merges: HashSet<(Vec<u8>, Vec<u8>)>) -> Self {
+        CoreBPE { vocab, merges }
+    }
+
+    /// 核心逻辑：对应你 Python 中的 apply_merges
+    /// 但是这里一次性处理一批单词，减少跨语言调用的开销
+    fn encode_word_batch(&self, words: Vec<String>) -> Vec<i32> {
+        let mut results = Vec::new();
+
+        for word in words {
+            // 1. 将单词转换为字节列表
+            let mut current_bytes: Vec<Vec<u8>> = word.as_bytes()
+                .iter()
+                .map(|&b| vec![b])
+                .collect();
+
+            // 2. BPE Merge Loop
+            loop {
+                let mut best_pair_idx: Option<usize> = None;
+                let mut min_token_id = i32::MAX;
+                let mut best_merged_token: Vec<u8> = Vec::new();
+
+                // 寻找最优合并对 (Greedy by lowest Token ID)
+                // 对应 Python: if token_id < min_token_id
+                if current_bytes.len() < 2 {
+                    break;
+                }
+
+                for i in 0..current_bytes.len() - 1 {
+                    let pair = (current_bytes[i].clone(), current_bytes[i + 1].clone());
+                    
+                    // 检查 pair 是否在 merges 集合中
+                    if self.merges.contains(&pair) {
+                        let combined = [pair.0, pair.1].concat();
+                        
+                        // 检查合并后的词是否在 vocab 中，并比较 ID
+                        if let Some(&id) = self.vocab.get(&combined) {
+                            if id < min_token_id {
+                                min_token_id = id;
+                                best_pair_idx = Some(i);
+                                best_merged_token = combined;
+                            }
+                        }
+                    }
+                }
+
+                // 执行合并
+                match best_pair_idx {
+                    Some(idx) => {
+                        current_bytes[idx] = best_merged_token;
+                        current_bytes.remove(idx + 1);
+                    }
+                    None => break, // 没有可合并的了
+                }
+            }
+
+            // 3. 将最终的 bytes 转换为 ID
+            for token_bytes in current_bytes {
+                if let Some(&id) = self.vocab.get(&token_bytes) {
+                    results.push(id);
+                } else {
+                    // 处理 UNK (虽然理论上字节级 BPE 不会有 UNK，但为了健壮性)
+                    // 这里简单处理：忽略或报错，根据你的需求。
+                    // 这里的逻辑假设所有 bytes 都在 vocab 里 (byte-level BPE 基础特性)
+                    eprintln!("Warning: Byte sequence not found in vocab: {:?}", token_bytes);
+                }
+            }
+        }
+
+        results
+    }
+}
+
+
 #[pymodule]
 fn bpe_rust(_py: Python, m: &PyModule) -> PyResult<()> {
+    // 训练用的函数
     m.add_function(wrap_pyfunction!(bpe_merge_loop, m)?)?;
+    // 推理用的类
+    m.add_class::<CoreBPE>()?;
     Ok(())
 }

@@ -58,7 +58,6 @@ def word2bytes(word: str) -> tuple[bytes, ...]:
     """
     return tuple(bytes([i]) for i in word.encode('utf-8'))
 
-
 # ----------------------------------------------------------------------
 # BPE Training Functions
 # ----------------------------------------------------------------------
