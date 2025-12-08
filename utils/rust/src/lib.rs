@@ -1,124 +1,85 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple, PyList};
-use std::collections::HashMap;
+use pyo3::types::{PyBytes, PyList};
+use std::collections::{HashMap, HashSet, BinaryHeap};
+use std::cmp::Ordering;
 use indicatif::{ProgressBar, ProgressStyle};
 
-/// apply_merge - 内部辅助函数
-fn apply_merge_internal(word_bytes: &[Vec<u8>], merge: &(Vec<u8>, Vec<u8>)) -> Vec<Vec<u8>> {
-    let mut res = Vec::with_capacity(word_bytes.len());
-    let merged = [merge.0.clone(), merge.1.clone()].concat();
-    let mut i = 0;
+// --- 数据结构 ---
 
-    while i < word_bytes.len() {
-        if i < word_bytes.len() - 1 && word_bytes[i] == merge.0 && word_bytes[i + 1] == merge.1 {
-            res.push(merged.clone());
-            i += 2;
-        } else {
-            res.push(word_bytes[i].clone());
-            i += 1;
-        }
-    }
-    res
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct PairCount {
+    count: i32,
+    pair: (Vec<u8>, Vec<u8>),
 }
 
-/// Python 接口 apply_merge
-#[pyfunction]
-fn apply_merge(word_bytes: Vec<Vec<u8>>, merge: (Vec<u8>, Vec<u8>)) -> Vec<Vec<u8>> {
-    apply_merge_internal(&word_bytes, &merge)
+impl Ord for PairCount {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.count.cmp(&other.count)
+            .then_with(|| self.pair.cmp(&other.pair))
+    }
 }
 
-/// 找到最大 pair（保留 tie-break 逻辑）
-fn get_max_pair(pair_cnt: &HashMap<(Vec<u8>, Vec<u8>), i32>) -> Option<(Vec<u8>, Vec<u8>)> {
-    pair_cnt.iter()
-        .max_by_key(|&(pair, &count)| (count, pair.clone()))
-        .map(|(pair, _)| pair.clone())
+impl PartialOrd for PairCount {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
-/// 内部更新 word_cnt 和 pair_cnt
-fn update_cnt_optimized_internal(
-    word_cnt: HashMap<Vec<Vec<u8>>, i32>,
-    mut pair_cnt: HashMap<(Vec<u8>, Vec<u8>), i32>,
-    merge_pair: &(Vec<u8>, Vec<u8>),
-) -> (HashMap<Vec<Vec<u8>>, i32>, HashMap<(Vec<u8>, Vec<u8>), i32>) {
-    let mut new_word_cnt = HashMap::new();
-    let mut words_to_update = Vec::new();
-
-    // 分离需要更新和不需要更新的词
-    for (word, cnt) in word_cnt {
-        let contains_merge = word.windows(2).any(|w| w[0] == merge_pair.0 && w[1] == merge_pair.1);
-        if contains_merge {
-            words_to_update.push((word, cnt));
-        } else {
-            new_word_cnt.insert(word, cnt);
-        }
-    }
-
-    // 更新包含 merge_pair 的词
-    for (word, cnt) in words_to_update {
-        // 减掉旧 pair 的计数
-        for w in word.windows(2) {
-            let key = (w[0].clone(), w[1].clone());
-            if let Some(v) = pair_cnt.get_mut(&key) {
-                *v -= cnt;
-                if *v <= 0 {
-                    pair_cnt.remove(&key);
-                }
-            }
-        }
-
-        // 应用 merge 得到新词
-        let new_word = apply_merge_internal(&word, merge_pair);
-        *new_word_cnt.entry(new_word.clone()).or_insert(0) += cnt;
-
-        // 增加新 pair 的计数
-        for w in new_word.windows(2) {
-            *pair_cnt.entry((w[0].clone(), w[1].clone())).or_insert(0) += cnt;
-        }
-    }
-
-    (new_word_cnt, pair_cnt)
+// 使用 Struct 替代 HashMap Entry，支持原地修改
+struct WordData {
+    tokens: Vec<Vec<u8>>,
+    count: i32,
 }
 
-/// Python 接口 update_cnt_optimized
-#[pyfunction]
-fn update_cnt_optimized<'py>(
-    py: Python<'py>,
-    word_cnt: HashMap<Vec<Vec<u8>>, i32>,
-    pair_cnt: HashMap<(Vec<u8>, Vec<u8>), i32>,
-    merge_pair: (Vec<u8>, Vec<u8>),
-) -> PyResult<(&'py PyDict, &'py PyDict)> {
+// --- 核心逻辑 ---
 
-    let (new_word_cnt, new_pair_cnt) =
-        update_cnt_optimized_internal(word_cnt, pair_cnt, &merge_pair);
-
-    let py_word_cnt = PyDict::new(py);
-    for (word, cnt) in new_word_cnt {
-        let py_key = PyTuple::new(py, word.iter().map(|b| PyBytes::new(py, b)));
-        py_word_cnt.set_item(py_key, cnt)?;
-    }
-
-    let py_pair_cnt = PyDict::new(py);
-    for ((a, b), cnt) in new_pair_cnt {
-        py_pair_cnt.set_item((PyBytes::new(py, &a), PyBytes::new(py, &b)), cnt)?;
-    }
-
-    Ok((py_word_cnt, py_pair_cnt))
-}
-
-/// BPE merge loop，保留 progress bar 和 tie-break
 #[pyfunction]
 fn bpe_merge_loop<'py>(
     py: Python<'py>,
     word_cnt: HashMap<Vec<Vec<u8>>, i32>,
-    pair_cnt: HashMap<(Vec<u8>, Vec<u8>), i32>,
+    _pair_cnt_unused: HashMap<(Vec<u8>, Vec<u8>), i32>, // 我们重新计算 pair_cnt 以确保索引一致
     n_merges: usize,
 ) -> PyResult<&'py PyList> {
 
-    let mut current_word_cnt = word_cnt;
-    let mut current_pair_cnt = pair_cnt;
-    let mut merges = Vec::new();
+    // 1. 初始化数据结构
+    // 将 Python 传来的 Dict 扁平化为 Vec，方便通过索引访问
+    let mut words: Vec<WordData> = word_cnt.into_iter().map(|(tokens, count)| {
+        WordData { tokens, count }
+    }).collect();
 
-    // 创建进度条
+    // 倒排索引: Token -> [WordIndex, WordIndex, ...]
+    // 告诉我们需要检查哪些单词
+    let mut token_to_word_idx: HashMap<Vec<u8>, HashSet<usize>> = HashMap::new();
+    let mut pair_counts: HashMap<(Vec<u8>, Vec<u8>), i32> = HashMap::new();
+    let mut heap = BinaryHeap::new();
+
+    // 2. 初始构建索引和 Pair 计数
+    // 这一步虽然是全量扫描，但只做一次
+    let pb_init = ProgressBar::new(words.len() as u64);
+    pb_init.set_message("Building Index");
+    
+    for (idx, word) in words.iter().enumerate() {
+        for i in 0..word.tokens.len() {
+            let t = &word.tokens[i];
+            token_to_word_idx.entry(t.clone()).or_default().insert(idx);
+
+            if i < word.tokens.len() - 1 {
+                let pair = (word.tokens[i].clone(), word.tokens[i+1].clone());
+                *pair_counts.entry(pair).or_default() += word.count;
+            }
+        }
+        pb_init.inc(1);
+    }
+    pb_init.finish_and_clear();
+
+    // 初始建堆
+    for (pair, &count) in pair_counts.iter() {
+        heap.push(PairCount { count, pair: pair.clone() });
+    }
+
+    let mut merges = Vec::new();
+    
+    // 进度条
     let pb = ProgressBar::new(n_merges as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -128,29 +89,123 @@ fn bpe_merge_loop<'py>(
     );
     pb.set_message("BPE Merging");
 
+    // 3. 主循环
     for _ in 0..n_merges {
-        if current_pair_cnt.is_empty() { break; }
+        // --- Pop Max Pair ---
+        let max_pair = loop {
+            match heap.pop() {
+                Some(pc) => {
+                    match pair_counts.get(&pc.pair) {
+                        Some(&real_count) if real_count == pc.count => break Some(pc.pair),
+                        _ => continue, // Stale
+                    }
+                }
+                None => break None,
+            }
+        };
 
-        let max_pair = match get_max_pair(&current_pair_cnt) {
+        let best_pair = match max_pair {
             Some(p) => p,
             None => break,
         };
-        merges.push(max_pair.clone());
 
-        let (new_word_cnt, new_pair_cnt) = update_cnt_optimized_internal(
-            current_word_cnt,
-            current_pair_cnt,
-            &max_pair
-        );
+        merges.push(best_pair.clone());
+        let merged_token = [best_pair.0.clone(), best_pair.1.clone()].concat();
 
-        current_word_cnt = new_word_cnt;
-        current_pair_cnt = new_pair_cnt;
+        // --- 核心优化：只处理包含 best_pair.0 的单词 ---
+        // 我们 clone 这个 HashSet 的一部分 keys (usize) 是非常廉价的
+        // 必须 clone，因为我们要在循环中修改 token_to_word_idx
+        let word_indices: Vec<usize> = match token_to_word_idx.get(&best_pair.0) {
+            Some(indices) => indices.iter().cloned().collect(),
+            None => Vec::new(),
+        };
 
+        let mut delta_map: HashMap<(Vec<u8>, Vec<u8>), i32> = HashMap::new();
+        let (target_a, target_b) = &best_pair;
+
+        for &idx in &word_indices {
+            let word_data = &mut words[idx];
+            let count = word_data.count;
+            let tokens = &mut word_data.tokens;
+            
+            // 快速检查：如果单词里根本没有 target_b，那肯定无法合并 (A 后必须跟 B)
+            // (虽然 A 在单词里，但可能是结尾，或者后面不是 B)
+            // 这个检查能省去很多 vector 操作
+            // 注意：这种检查在 Rust 里需要借用，稍微留意一下性能，这里直接做简单的循环逻辑即可
+            
+            let mut i = 0;
+            let mut change_occurred = false;
+
+            while i < tokens.len() {
+                // 检查是否匹配 (A, B)
+                if i < tokens.len() - 1 && &tokens[i] == target_a && &tokens[i+1] == target_b {
+                    // --- Merge Logic ---
+                    
+                    // 1. 记录 Delta: 减少旧 Pair
+                    *delta_map.entry((target_a.clone(), target_b.clone())).or_default() -= count;
+                    
+                    // 2. 处理左邻居 (Prev, A) -> (Prev, AB)
+                    if i > 0 {
+                        let prev = &tokens[i-1];
+                        *delta_map.entry((prev.clone(), target_a.clone())).or_default() -= count;
+                        *delta_map.entry((prev.clone(), merged_token.clone())).or_default() += count;
+                    }
+                    
+                    // 3. 处理右邻居 (B, Next) -> (AB, Next)
+                    if i + 2 < tokens.len() {
+                        let next = &tokens[i+2];
+                        *delta_map.entry((target_b.clone(), next.clone())).or_default() -= count;
+                        *delta_map.entry((merged_token.clone(), next.clone())).or_default() += count;
+                    }
+
+                    // 4. 执行合并：修改 Vector
+                    // 将 i 替换为 merged_token，删除 i+1
+                    tokens[i] = merged_token.clone();
+                    tokens.remove(i+1); // 这里的 remove 是 O(WordLength)，通常很短，可以接受
+                    
+                    change_occurred = true;
+                    
+                    // 这里的 i 不加，因为当前的 i 变成了 AB，可能和下一个 B 再次构成 AB B (如果逻辑允许，虽然BPE通常是从左到右 greedy)
+                    // 标准 BPE 是 greedy left-to-right。
+                    // 变成了 AB。我们需要检查 AB 是否和后面的 Token 构成新的一对？
+                    // 不，当前轮次我们只合并 A+B。AB 是新 token，不会在这一轮再次被合并。
+                    // 所以我们可以安全地跳过。
+                    // 但是，如果原序列是 A B A B -> AB AB，我们需要继续处理后面的。
+                    // 所以 i += 1 (跳过当前的 AB，去看下一个)
+                    i += 1; 
+                } else {
+                    i += 1;
+                }
+            }
+
+            if change_occurred {
+                // 更新倒排索引：这个单词现在包含了 merged_token
+                token_to_word_idx.entry(merged_token.clone()).or_default().insert(idx);
+                // 注意：我们不需要从 A 或 B 的索引中删除 idx。
+                // 1. 删除操作很慢 (HashSet remove)。
+                // 2. 留着也无所谓，反正下次 pop A 时，代码会检查 word 里还有没有 A。如果没有，就什么都不做。
+                // 这叫 "Lazy Index Cleanup"。
+            }
+        }
+
+        // --- 应用 Delta 更新全局 Pair Counts ---
+        for (pair, delta) in delta_map {
+            let entry = pair_counts.entry(pair.clone()).or_insert(0);
+            *entry += delta;
+            
+            if *entry > 0 {
+                heap.push(PairCount { count: *entry, pair });
+            } else {
+                pair_counts.remove(&pair);
+            }
+        }
+        
         pb.inc(1);
     }
 
     pb.finish_with_message("BPE Merging complete");
 
+    // 4. 转换回 Python 列表
     let py_merges = PyList::empty(py);
     for (a, b) in merges {
         py_merges.append((PyBytes::new(py, &a), PyBytes::new(py, &b)))?;
@@ -160,8 +215,6 @@ fn bpe_merge_loop<'py>(
 
 #[pymodule]
 fn bpe_rust(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(apply_merge, m)?)?;
-    m.add_function(wrap_pyfunction!(update_cnt_optimized, m)?)?;
     m.add_function(wrap_pyfunction!(bpe_merge_loop, m)?)?;
     Ok(())
 }
