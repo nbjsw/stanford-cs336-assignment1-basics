@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use std::collections::HashMap;
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// apply_merge - 内部辅助函数
 fn apply_merge_internal(word_bytes: &[Vec<u8>], merge: &(Vec<u8>, Vec<u8>)) -> Vec<Vec<u8>> {
@@ -126,6 +127,16 @@ fn bpe_merge_loop<'py>(
     let mut current_pair_cnt = pair_cnt;
     let mut merges = Vec::new();
     
+    // 创建进度条
+    let pb = ProgressBar::new(n_merges as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} {bar:40.cyan/blue} {pos}/{len} [{elapsed_precise}] {per_sec}")
+            .unwrap()
+            .progress_chars("█▓▒░ ")
+    );
+    pb.set_message("BPE Merging");
+    
     for _ in 0..n_merges {
         if current_pair_cnt.is_empty() {
             break;
@@ -148,7 +159,11 @@ fn bpe_merge_loop<'py>(
         
         current_word_cnt = new_word_cnt;
         current_pair_cnt = new_pair_cnt;
+        
+        pb.inc(1);
     }
+    
+    pb.finish_with_message("BPE Merging complete");
     
     // 转换 merges 为 Python list
     let py_merges = PyList::empty(py);
