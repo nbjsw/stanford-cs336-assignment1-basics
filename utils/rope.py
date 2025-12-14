@@ -1,6 +1,6 @@
 import torch
 
-from einops import einsum
+from einops import einsum, rearrange
 
 
 class RotaryPositionalEmbedding(torch.nn.Module):
@@ -131,6 +131,15 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         # x_rot 实现了 [x, y] -> [-y, x] 的转换
         # x_rot 形状: (..., seq_len, d_k)
         x_rot = self._rotate_half(x)
+
+        # 原始形状: (B, L, D_h)
+        # 目标形状: (B, 1, L, D_h)
+        if cos_sliced.ndim == 3:
+            # 使用 einops 优雅地插入一个维度
+            cos_sliced = rearrange(cos_sliced, 'b l d -> b 1 l d')
+
+            # 对 sin_sliced 做同样处理 (假设它也用于 RoPE 乘法)
+            sin_sliced = rearrange(sin_sliced, 'b l d -> b 1 l d')
 
         # --- 步骤 3: 应用 RoPE 旋转公式 (元素乘加) ---
         # 公式等价于: x' = x * cos(theta) + R(x) * sin(theta)

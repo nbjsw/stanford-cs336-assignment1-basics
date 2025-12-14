@@ -89,11 +89,14 @@ class Tokenizer:
 
         merges_set = set(merges)
 
+        # for token_bytes in self.special_tokens_bytes:
+        #     if token_bytes not in self.vocab_to_id:
+        #         new_id = len(self.vocab)
+        #         self.vocab[new_id] = token_bytes
+        #         self.vocab_to_id[token_bytes] = new_id
         for token_bytes in self.special_tokens_bytes:
             if token_bytes not in self.vocab_to_id:
-                new_id = len(self.vocab)
-                self.vocab[new_id] = token_bytes
-                self.vocab_to_id[token_bytes] = new_id
+                raise ValueError(f"Special token '{token_bytes.decode()}' not found in loaded vocabulary. Fix BPE training!")
 
         self.core_bpe = bpe_rust.CoreBPE(self.vocab_to_id, merges_set)
 

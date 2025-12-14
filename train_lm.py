@@ -273,6 +273,23 @@ def train(args):
             # --- 核心：梯度累加循环 ---
             current_train_loss = 0.0
             
+            # 计算本迭代的随机 RoPE 偏移
+            # Llama/Mistral 风格：在训练中随机化 RoPE 绝对位置
+            B, L = prefetched_batches[0][0].shape # 从第一个预取批次获取 B 和 L
+            max_offset = args.context_length # 设置一个偏移上限
+
+            # 随机选择一个偏移量 S (例如，在 0 到 L 之间)
+            # 这样模型就不知道自己是不是在序列的开头
+            random_offset = torch.randint(0, max_offset + 1, (1,)).item()
+
+            # 创建偏移后的位置张量: [S, S+1, ..., S+L-1]
+            positions = torch.arange(L, device=device, dtype=torch.long) + random_offset
+            # 扩展到 (B, L)
+            token_positions = positions.unsqueeze(0).expand(B, L)
+
+            # 确保 token_positions 的 dtype 匹配 Attention/RoPE 的要求 (通常是 torch.long)
+            token_positions = token_positions.to(device)
+
             for micro_step in range(args.accumulation_steps):
                 # 从预取列表中获取当前微步的数据 (连续小批次)
                 X, Y = prefetched_batches[micro_step]
@@ -281,7 +298,7 @@ def train(args):
                 torch.compiler.cudagraph_mark_step_begin()
                 with torch.amp.autocast('cuda', dtype=compute_dtype):
                     # 2. 前向传播 (Forward Pass)
-                    logits = model(X)
+                    logits = model(X, token_positions=token_positions)
 
                     # 展平 Logits 和 Targets Y
                     flat_logits = rearrange(logits, 'b l v -> (b l) v')
@@ -365,15 +382,15 @@ if __name__ == '__main__':
     parser.add_argument('--accumulation_steps', type=int, default=16, help="Gradient accumulation steps (等效 B=512).")
 
     # --- 优化器/调度器参数 (调整以解决 PPL 飙升问题) ---
-    parser.add_argument('--max_lr', type=float, default=1e-4, help="Maximum learning rate.")
-    parser.add_argument('--min_lr', type=float, default=1e-5, help="Minimum learning rate.")
-    parser.add_argument('--warmup_steps', type=int, default=500, help="Number of steps for linear LR warm-up (缩短 Warmup).")
-    parser.add_argument('--decay_steps', type=int, default=19500, help="Number of steps for cosine annealing decay.")
+    parser.add_argument('--max_lr', type=float, default=5e-5, help="Maximum learning rate.")
+    parser.add_argument('--min_lr', type=float, default=5e-6, help="Minimum learning rate.")
+    parser.add_argument('--warmup_steps', type=int, default=2000, help="Number of steps for linear LR warm-up (缩短 Warmup).")
+    parser.add_argument('--decay_steps', type=int, default=18000, help="Number of steps for cosine annealing decay.")
     parser.add_argument('--grad_clip_norm', type=float, default=1.0, help="Maximum L2 norm for gradient clipping.")
 
     # AdamW specific (调整以增强稳定性)
     parser.add_argument('--beta1', type=float, default=0.9, help="AdamW beta1.")
-    parser.add_argument('--beta2', type=float, default=0.95, help="AdamW beta2.")
+    parser.add_argument('--beta2', type=float, default=0.999, help="AdamW beta2.")
     parser.add_argument('--eps', type=float, default=1e-8, help="AdamW epsilon for numerical stability.")
     parser.add_argument('--weight_decay', type=float, default=0.01, help="AdamW weight decay (降低正则化强度).")
 

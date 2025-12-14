@@ -19,7 +19,10 @@ class TransformerLM(torch.nn.Module):
 
         factory_kwargs = {'device': device, 'dtype': dtype}
 
-        self.token_embeddings = embedding.Embedding(vocab_size, d_model, **factory_kwargs)
+        self.token_embeddings = embedding.Embedding(
+            num_embeddings=vocab_size, 
+            embedding_dim=d_model, 
+            **factory_kwargs)
 
         self.layers = torch.nn.ModuleList(
             [prenorm_transformer_block.PreNormTransformerBlock(
@@ -31,10 +34,10 @@ class TransformerLM(torch.nn.Module):
         self.lm_head = linear.Linear(d_model, vocab_size, **factory_kwargs)
 
     
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
         x = self.token_embeddings(tokens)
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, token_positions=token_positions)
         x = self.ln_final(x)
         logits = self.lm_head(x)
         return logits

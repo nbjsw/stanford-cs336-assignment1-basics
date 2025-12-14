@@ -16,8 +16,8 @@ class PreNormTransformerBlock(torch.nn.Module):
         self.ffn = swiglu.SwiGLU(d_model, d_ff, **factory_kwargs)
 
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        attentioned_x = x + self.attn(self.ln1(x))
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        attentioned_x = x + self.attn(self.ln1(x), token_positions=token_positions)
         out = attentioned_x + self.ffn(self.ln2(attentioned_x))
         return out
 

@@ -67,7 +67,7 @@ class CausalMultiheadSelfAttention(torch.nn.Module):
             self.rope = rope.RotaryPositionalEmbedding(
                 theta=theta,
                 d_k=self.d_head,
-                max_seq_len=max_seq_len,
+                max_seq_len=max_seq_len + 2048,
                 device=device,
                 dtype=dtype
             )
